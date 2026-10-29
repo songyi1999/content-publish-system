@@ -105,6 +105,8 @@ export interface PlayableItem {
   localPath?: string;
   /** 服务端地址（下载阶段使用） */
   remoteUrl?: string;
+  /** 富文本正文（终端直接渲染，无需下载） */
+  html?: string;
   /** 单条停留秒数；视频缺省按自身时长 */
   durationSec?: number;
   /** sha256 校验值，用于断点续传后的完整性校验 */

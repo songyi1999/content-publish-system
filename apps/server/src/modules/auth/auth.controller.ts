@@ -1,4 +1,5 @@
-import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Post, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import type { LoginDto, LoginResult } from '@cps/shared';
 import { JwtUser, Public } from '../../common/auth.guard';
 import { CurrentUser } from '../../common/current-user.decorator';
@@ -11,8 +12,8 @@ export class AuthController {
   @Post('login')
   @Public()
   @HttpCode(200)
-  login(@Body() dto: LoginDto): Promise<LoginResult> {
-    return this.auth.login(dto);
+  login(@Body() dto: LoginDto, @Req() req: Request): Promise<LoginResult> {
+    return this.auth.login(dto, req.ip);
   }
 
   @Get('me')

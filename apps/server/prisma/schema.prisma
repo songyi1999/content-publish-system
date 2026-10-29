@@ -18,6 +18,7 @@ model Role {
   remark      String?
   /// 权限编码数组，如 ["content:*","publish:none"]；admin 为 ["*"]
   permissions String[]
+  createdAt   DateTime @default(now())
   users       User[]
 }
 
@@ -57,8 +58,11 @@ model MediaAsset {
   mimeType    String?
   sizeBytes   Int?
   sha256      String?  @unique
+  /// 附加属性：缩略图路径、转码标记等
+  body        Json?
   createdAt   DateTime @default(now())
   contents    Content[]
+  programItems ProgramItem[]
 }
 
 model Content {
@@ -85,9 +89,10 @@ model Content {
 //终端管理（R3/R13/R14）
 
 model DeviceGroup {
-  id      String   @id @default(cuid())
-  name    String   @unique
-  devices Device[]
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  devices   Device[]
 }
 
 model Device {
@@ -105,6 +110,7 @@ model Device {
   lastSeenAt   DateTime?
   /// 定时开关机策略（R13）：{daysOfWeek:[1-6], onMinute:480, offMinute:1260}
   powerPlan    Json?
+  screenshots  ScreenshotLog[]
   enabled      Boolean      @default(true)
   createdAt    DateTime     @default(now())
 }
@@ -118,16 +124,20 @@ model PublishTask {
   /// ALL | GROUP | DEVICE（见 @cps/shared TargetType）
   targetType String
   targetIds  String[]
-  /// PENDING | DOWNLOADING | DONE | FAILED
+  /// PENDING | DISPATCHED | DONE | REVOKED | FAILED
   status     String   @default("PENDING")
+  /// 每终端下发状态：{deviceCode: SENT|QUEUED|FAILED}
+  body       Json?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
 
 model Schedule {
-  id            String  @id @default(cuid())
+  id            String   @id @default(cuid())
   name          String
+  createdAt     DateTime @default(now())
   programId     String
+  program       Program  @relation(fields: [programId], references: [id])
   targetGroupIds String[]
   /// 数值越大优先级越高；紧急插播 100
   priority      Int     @default(1)
@@ -135,6 +145,49 @@ model Schedule {
   startMinute   Int     @default(0)
   endMinute     Int     @default(1440)
   enabled       Boolean @default(true)
+}
+
+// 节目与节目条目（R11 模板化分屏编排）
+
+model Program {
+  id        String          @id @default(cuid())
+  name      String
+  /// full | left-right | three-col | video-ticker
+  layout    String          @default("full")
+  enabled   Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  items     ProgramItem[]
+  schedules Schedule[]
+}
+
+model ProgramItem {
+  id           String   @id @default(cuid())
+  programId    String
+  program      Program  @relation(fields: [programId], references: [id], onDelete: Cascade)
+  sort         Int      @default(0)
+  /// image | video | web | text
+  type         String
+  title        String?
+  mediaId      String?
+  media        MediaAsset? @relation(fields: [mediaId], references: [id])
+  durationSec  Int?
+  /// 附加：网页 url 等
+  body         Json?
+}
+
+// 终端监播截图（R14）
+
+model ScreenshotLog {
+  id         String   @id @default(cuid())
+  deviceId   String
+  device     Device   @relation(fields: [deviceId], references: [id])
+  storagePath String
+  /// 平均哈希（aHash 十六进制），用于黑屏/静止判定
+  ahash      String?
+  anomaly    String?
+  createdAt  DateTime @default(now())
+
+  @@index([deviceId, createdAt])
 }
 
 //日志审计（R7）
