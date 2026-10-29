@@ -1,0 +1,20 @@
+{
+  "name": "@cps/player-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "终端播放器内核：节目单调度、优先级冲突、离线内容库（纯 TS，双端复用）",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cps/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

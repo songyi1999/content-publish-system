@@ -1,0 +1,30 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+
+# 环境与本地数据
+.env
+.env.*.local
+data/
+apps/server/media/
+
+# Android 构建产物（android/ 工程本身入库）
+apps/client-android/android/.gradle/
+apps/client-android/android/app/build/
+apps/client-android/android/build/
+apps/client-android/android/local.properties
+apps/client-android/android/.idea/
+apps/client-android/*.keystore
+apps/client-android/android/app/release.keystore
+
+# Electron 发布产物
+apps/client-windows/release/
+
+# IDE / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

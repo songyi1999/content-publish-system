@@ -1,0 +1,33 @@
+# 开发环境：仅起基础设施（PostgreSQL + Redis），服务端/前端本地跑
+# 用法：pnpm dev:infra
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cps-postgres-dev
+    environment:
+      POSTGRES_USER: cps
+      POSTGRES_PASSWORD: cps123456
+      POSTGRES_DB: cps
+    ports:
+      - '15432:5432'
+    volumes:
+      - cps-pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cps -d cps']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: cps-redis-dev
+    ports:
+      - '16379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  cps-pgdata-dev:

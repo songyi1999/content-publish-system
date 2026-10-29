@@ -1,0 +1,22 @@
+{
+  "name": "content-publish-system",
+  "version": "0.1.0",
+  "private": true,
+  "description": "内容集中发布系统：NestJS 服务端 + Vue3 管理后台 + Capacitor Android / Electron Windows 终端",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "scripts": {
+    "dev:infra": "docker compose -f docker-compose.dev.yml up -d",
+    "dev:infra:down": "docker compose -f docker-compose.dev.yml down",
+    "dev:server": "pnpm --filter @cps/server run start:dev",
+    "dev:web": "pnpm --filter @cps/admin-web run dev",
+    "dev:player": "pnpm --filter @cps/player-web run dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "db:migrate": "pnpm --filter @cps/server exec prisma migrate dev",
+    "db:seed": "pnpm --filter @cps/server exec prisma db seed",
+    "db:studio": "pnpm --filter @cps/server exec prisma studio"
+  }
+}

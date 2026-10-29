@@ -1,0 +1,15 @@
+{
+  "name": "@cps/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "服务端与双端共享的协议常量、状态机与 DTO 类型",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

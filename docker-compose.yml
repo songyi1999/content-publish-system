@@ -1,0 +1,64 @@
+# 全栈容器化部署：PostgreSQL + Redis + 服务端 + 管理后台
+# 用法：cp .env.example .env（按需修改）后 docker compose up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cps-postgres
+    environment:
+      POSTGRES_USER: cps
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cps123456}
+      POSTGRES_DB: cps
+    volumes:
+      - cps-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U cps -d cps']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: cps-redis
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: cps-server
+    environment:
+      DATABASE_URL: postgresql://cps:${POSTGRES_PASSWORD:-cps123456}@postgres:5432/cps?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      MEDIA_ROOT: /app/media
+      PORT: '3000'
+    volumes:
+      - ./data/media:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '3000:3000'
+    restart: unless-stopped
+
+  admin-web:
+    build:
+      context: .
+      dockerfile: apps/admin-web/Dockerfile
+    container_name: cps-admin-web
+    depends_on:
+      - server
+    ports:
+      - '8080:80'
+    restart: unless-stopped
+
+volumes:
+  cps-pgdata:

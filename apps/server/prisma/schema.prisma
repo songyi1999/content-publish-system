@@ -1,0 +1,155 @@
+// 内容集中发布系统 核心数据模型（草案，随里程碑演进）
+// 对应功能清单：UM 权限与用户 / CM 栏目内容 / DV 终端 / PB 发布 / AV 审核 / LG 日志 / PD 排期
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+//权限与用户（R6 RBAC）
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  remark      String?
+  /// 权限编码数组，如 ["content:*","publish:none"]；admin 为 ["*"]
+  permissions String[]
+  users       User[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  displayName  String?
+  roleId       String?
+  role         Role?    @relation(fields: [roleId], references: [id])
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  auditLogs    AuditLog[]
+}
+
+//栏目与内容（R1/R4/R9）
+
+model ColumnNode {
+  id       String       @id @default(cuid())
+  name     String
+  parentId String?
+  parent   ColumnNode?  @relation("tree", fields: [parentId], references: [id])
+  children ColumnNode[] @relation("tree")
+  sort     Int          @default(0)
+  enabled  Boolean      @default(true)
+  contents Content[]
+}
+
+model MediaAsset {
+  id          String   @id @default(cuid())
+  /// image | video | audio | doc
+  kind        String
+  /// 相对 MEDIA_ROOT 的路径
+  storagePath String
+  originalName String?
+  mimeType    String?
+  sizeBytes   Int?
+  sha256      String?  @unique
+  createdAt   DateTime @default(now())
+  contents    Content[]
+}
+
+model Content {
+  id        String        @id @default(cuid())
+  title     String
+  columnId  String?
+  column    ColumnNode?   @relation(fields: [columnId], references: [id])
+  /// richtext | image | video | doc | program
+  type      String
+  /// 类型相关负载（富文本 HTML、节目 JSON 等）
+  body      Json?
+  mediaId   String?
+  media     MediaAsset?   @relation(fields: [mediaId], references: [id])
+  /// 见 @cps/shared ContentStatus
+  status    String        @default("DRAFT")
+  validFrom DateTime?
+  validTo   DateTime?
+  sort      Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  tasks     PublishTask[]
+}
+
+//终端管理（R3/R13/R14）
+
+model DeviceGroup {
+  id      String   @id @default(cuid())
+  name    String   @unique
+  devices Device[]
+}
+
+model Device {
+  id           String       @id @default(cuid())
+  code         String       @unique
+  name         String?
+  /// 一次性激活码（R1 终端注册）
+  activateCode String?
+  /// 设备指纹密钥，激活后颁发
+  deviceKey    String?      @unique
+  groupId      String?
+  group        DeviceGroup? @relation(fields: [groupId], references: [id])
+  appVersion   String?
+  ip           String?
+  lastSeenAt   DateTime?
+  /// 定时开关机策略（R13）：{daysOfWeek:[1-6], onMinute:480, offMinute:1260}
+  powerPlan    Json?
+  enabled      Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+}
+
+//发布（R1）与排期（R12）
+
+model PublishTask {
+  id         String   @id @default(cuid())
+  contentId  String
+  content    Content  @relation(fields: [contentId], references: [id])
+  /// ALL | GROUP | DEVICE（见 @cps/shared TargetType）
+  targetType String
+  targetIds  String[]
+  /// PENDING | DOWNLOADING | DONE | FAILED
+  status     String   @default("PENDING")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Schedule {
+  id            String  @id @default(cuid())
+  name          String
+  programId     String
+  targetGroupIds String[]
+  /// 数值越大优先级越高；紧急插播 100
+  priority      Int     @default(1)
+  daysOfWeek    Int[]   @default([])
+  startMinute   Int     @default(0)
+  endMinute     Int     @default(1440)
+  enabled       Boolean @default(true)
+}
+
+//日志审计（R7）
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  targetType String?
+  targetId   String?
+  detail     Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}

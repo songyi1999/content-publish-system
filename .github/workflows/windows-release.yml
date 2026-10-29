@@ -1,0 +1,53 @@
+name: Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'win-v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build player web assets
+        run: pnpm --filter @cps/player-web run build
+
+      - name: Build Electron main
+        run: pnpm --filter @cps/client-windows run build
+
+      - name: Package NSIS installer
+        run: pnpm --filter @cps/client-windows run dist
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cps-windows-exe
+          path: apps/client-windows/release/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/client-windows/release/*.exe
+          generate_release_notes: true
