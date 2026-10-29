@@ -167,10 +167,11 @@ export class MediaService {
     };
   }
 
-  /** 引用保护（CM-04）：被内容引用的素材禁止删除 */
+  /** 引用保护（CM-04）：被内容或节目条目引用的素材禁止删除 */
   async remove(id: string): Promise<{ ok: boolean; message?: string }> {
     const refCount = await this.prisma.content.count({ where: { mediaId: id } });
-    if (refCount > 0) return { ok: false, message: `素材被 ${refCount} 条内容引用，无法删除` };
+    const itemCount = await this.prisma.programItem.count({ where: { mediaId: id } });
+    if (refCount + itemCount > 0) return { ok: false, message: `素材被 ${refCount + itemCount} 处（内容/节目条目）引用，无法删除` };
     await this.prisma.mediaAsset.delete({ where: { id } });
     return { ok: true };
   }
