@@ -44,6 +44,7 @@
       <el-table-column label="操作" width="330">
         <template #default="{ row }">
           <el-button size="small" @click="open(row)">编辑</el-button>
+          <el-button size="small" @click="showVersions(row)">历史</el-button>
           <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'" size="small" type="warning" @click="submit(row)">提交审核</el-button>
           <el-button v-if="row.status === 'PUBLISHED'" size="small" type="danger" @click="goPublish(row)">再次发布</el-button>
           <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
@@ -72,6 +73,20 @@
         <el-button @click="dlg.visible = false">取消</el-button>
         <el-button type="primary" @click="save">保存</el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="verDlg.visible" title="历史版本（修改前自动快照）" width="560">
+      <el-table :data="verDlg.items" border size="small">
+        <el-table-column prop="title" label="标题" min-width="160" />
+        <el-table-column prop="createdAt" label="时间" width="170">
+          <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false }) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button size="small" type="warning" @click="restoreVer(row)">恢复</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
     </el-dialog>
 
     <el-dialog v-model="htmlDlg" title="导入 HTML" width="560">
@@ -189,6 +204,18 @@ function statusType(s: string): string {
 }
 function fmtDate(d: string | null): string {
   return d ? new Date(d).toLocaleDateString('zh-CN') : '-';
+}
+
+const verDlg = reactive({ visible: false, contentId: '', items: [] as Array<{ id: string; title: string; createdAt: string }> });
+async function showVersions(row: ContentRow): Promise<void> {
+  verDlg.contentId = row.id;
+  verDlg.items = (await http.get(`/contents/${row.id}/versions`)) as unknown as typeof verDlg.items;
+  verDlg.visible = true;
+}
+async function restoreVer(v: { id: string }): Promise<void> {
+  await ElMessageBox.confirm('恢复该版本后内容将回到草稿并需重新审核，确认？', '恢复版本');
+  await http.post(`/contents/${verDlg.contentId}/versions/${v.id}/restore`);
+  verDlg.visible = false; ElMessage.success('已恢复为草稿'); load();
 }
 
 onMounted(async () => {

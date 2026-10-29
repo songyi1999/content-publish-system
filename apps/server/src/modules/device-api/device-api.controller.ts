@@ -15,6 +15,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { createReadStream, statSync } from 'node:fs';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotifyService } from '../../common/notify.service';
 import { StorageService } from '../storage/storage.service';
 import { PublishService } from '../publish/publish.service';
 import { Public } from '../../common/auth.guard';
@@ -28,6 +29,7 @@ export class DeviceApiController {
     private readonly prisma: PrismaService,
     private readonly publish: PublishService,
     private readonly storage: StorageService,
+    private readonly notify: NotifyService,
   ) {}
 
   private async deviceBy(key?: string) {
@@ -43,11 +45,23 @@ export class DeviceApiController {
     return this.publish.activate(body.activateCode, ip);
   }
 
-  /** 客户端版本检查（TC-09）：返回最新版本与下载地址 */
+  /** 客户端版本检查（TC-09）+ 灰度（TC-11）：grayGroupIds 内的分组拿 latest，其余拿 stable */
   @Get('version')
   @Public()
-  version(@Headers('x-device-key') key?: string, @Headers('x-app-version') appVersion?: string) {
-    const latest = process.env.CLIENT_LATEST_VERSION || '0.1.0';
+  async version(@Headers('x-device-key') key?: string, @Headers('x-app-version') appVersion?: string) {
+    const params = await this.prisma.appParam.findMany({
+      where: { key: { in: ['latestVersion', 'stableVersion', 'grayGroupIds'] } },
+    });
+    const get = (k: string): unknown => params.find((p) => p.key === k)?.value ?? null;
+    let latest = (get('latestVersion') as string) || process.env.CLIENT_LATEST_VERSION || '0.1.0';
+    const stable = (get('stableVersion') as string) || latest;
+    const gray = (get('grayGroupIds') as string[]) ?? [];
+    if (key && gray.length > 0) {
+      // 灰度非空时，仅灰度组内设备拿 latest，其余（含未分组）拿 stable
+      const device = await this.prisma.device.findUnique({ where: { deviceKey: key } });
+      const inGray = !!device?.groupId && gray.includes(device.groupId);
+      if (!inGray) latest = stable;
+    }
     const apkUrl = process.env.CLIENT_APK_URL || '';
     const exeUrl = process.env.CLIENT_EXE_URL || '';
     return { latest, apkUrl, exeUrl, upToDate: !appVersion || appVersion >= latest };
@@ -61,7 +75,25 @@ export class DeviceApiController {
     return this.publish.manifest(device.id, BASE_FALLBACK);
   }
 
-  /** 媒体下载：支持 HTTP Range 断点续传（PB-08/R2） */
+  /** 限速管道（PB-10）：默认 8MB/s，env DOWNLOAD_RATE_MBPS 可调 */
+  private throttle(stream: NodeJS.ReadableStream): NodeJS.ReadableStream {
+    const mbps = Number(process.env.DOWNLOAD_RATE_MBPS || 8);
+    if (!mbps || mbps <= 0) return stream;
+    const chunkBytes = 256 * 1024;
+    const delayMs = (chunkBytes / (mbps * 1024 * 1024)) * 1000;
+    let pending = 0;
+    stream.on('data', () => {
+      pending += 1;
+      if (pending >= chunkBytes / chunkBytes && delayMs > 0) {
+        stream.pause();
+        setTimeout(() => stream.resume(), delayMs);
+        pending = 0;
+      }
+    });
+    return stream;
+  }
+
+  /** 媒体下载：支持 HTTP Range 断点续传（PB-08/R2）+ 限速（PB-10） */
   @Get('download/:mediaId')
   @Public()
   async download(@Param('mediaId') mediaId: string, @Res() res: Response, @Headers('range') range?: string) {
@@ -88,11 +120,11 @@ export class DeviceApiController {
       }
       res.status(206).setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
       res.setHeader('Content-Length', end - start + 1);
-      createReadStream(abs, { start, end }).pipe(res);
+      this.throttle(createReadStream(abs, { start, end })).pipe(res);
       return;
     }
     res.setHeader('Content-Length', size);
-    createReadStream(abs).pipe(res);
+    this.throttle(createReadStream(abs)).pipe(res);
   }
 
   /** 终端事件上报：下载完成 / 播放开始 / 更新结果（LG-04） */
@@ -129,6 +161,11 @@ export class DeviceApiController {
     if (anomaly) {
       await this.prisma.auditLog.create({
         data: { action: `SCREENSHOT_ANOMALY_${anomaly}`, targetType: 'device', targetId: device.id, detail: { path: rel } as never },
+      });
+      void this.notify.send({
+        key: `anomaly:${device.code}:${anomaly}`,
+        content: `【内容发布系统】终端画面异常告警：${device.name ?? device.code} 检出 ${anomaly === 'BLACK_SCREEN' ? '黑屏' : '画面静止'}（${new Date().toLocaleString('zh-CN', { hour12: false })}）`,
+        imageBase64: file.buffer.toString('base64'),
       });
     }
     return { ok: true, anomaly };

@@ -163,13 +163,18 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
     if (!device) throw new NotFoundException('设备不存在');
     const tasks = await this.prisma.publishTask.findMany({
       where: { status: 'DONE', content: { status: 'PUBLISHED' } },
-      include: { content: { include: { media: true } } },
+      include: { content: { include: { media: true, column: true } } },
     });
-    const visible = tasks.filter((t) =>
-      t.targetType === 'ALL' ||
-      (t.targetType === 'GROUP' && !!device.groupId && t.targetIds.includes(device.groupId)) ||
-      (t.targetType === 'DEVICE' && t.targetIds.includes(device.id)),
-    );
+    const visible = tasks.filter((t) => {
+      const byTarget =
+        t.targetType === 'ALL' ||
+        (t.targetType === 'GROUP' && !!device.groupId && t.targetIds.includes(device.groupId)) ||
+        (t.targetType === 'DEVICE' && t.targetIds.includes(device.id));
+      // 栏目-终端分组关联（CM-02）：栏目限制了可见分组时，仅组内终端可见
+      const col = (t.content as { column?: { groupIds?: string[] } | null }).column;
+      const byColumn = !col?.groupIds || col.groupIds.length === 0 || (!!device.groupId && col.groupIds.includes(device.groupId));
+      return byTarget && byColumn;
+    });
 
     const now = Date.now();
     const contents: PlayableItem[] = [];

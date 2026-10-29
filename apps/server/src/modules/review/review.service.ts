@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import { readFile } from 'node:fs/promises';
 import type { ContentStatus } from '@cps/shared';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { ContentsService } from '../contents/contents.service';
+import { VlmService } from './vlm.service';
 
 export interface AiVerdict {
   pass: boolean;
@@ -11,18 +14,20 @@ export interface AiVerdict {
 
 /**
  * AI 自动审核（R8/AV-04~08）：
- * - 文本：本地 DFA 敏感词引擎（词库可配置），命中即 suspect 以上
- * - 图片/视频：预留云审核 Provider 接口（AI_REVIEW_PROVIDER 配置），
- *   未配置云 Key 时图片视频直接放行并留痕（个人版起步策略，接云后自动启用）
+ * - 文本：本地 DFA 敏感词引擎（词库可配置）
+ * - 图片/视频：自建多模态大模型网关（OpenAI 兼容），视频抽 3 帧逐帧审核
+ * - VLM 不可用时放行进入人工复审兜底，调用结果全部留痕
  */
 @Injectable()
 export class ReviewService {
-  /** 敏感词库（AV-07 可配置）：默认内置基础政治/暴恐/色情样本，生产环境从管理端维护 */
+  /** 敏感词库（AV-07 可配置） */
   private words: string[] = ['示例敏感词', '涉暴恐', '色情', '反动'];
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly contents: ContentsService,
+    private readonly vlm: VlmService,
+    private readonly storage: StorageService,
   ) {}
 
   getSensitiveWords(): string[] {
@@ -46,20 +51,47 @@ export class ReviewService {
     return { pass: false, riskLevel: hits.length >= 3 ? 'violation' : 'suspect', hits };
   }
 
-  /** 提交后触发：AI 初审 → 通过进人工复审；疑似/违规驳回 */
+  /** 提交后触发：文本 DFA + 图片/视频 VLM → 全部通过进人工复审；命中驳回 */
   async runAiReview(contentId: string): Promise<{ next: ContentStatus; verdict: AiVerdict }> {
     const text = await this.contents.extractText(contentId);
-    const verdict = this.scanText(text);
+    const verdicts: AiVerdict[] = [this.scanText(text)];
+
+    const content = await this.prisma.content.findUnique({ where: { id: contentId }, include: { media: true } });
+    if (content?.media && ['image', 'video'].includes(content.media.kind)) {
+      try {
+        const abs = resolve(this.storage.rootDir, content.media.storagePath);
+        const buf = await readFile(abs);
+        if (content.media.kind === 'image') {
+          verdicts.push(await this.vlm.reviewImage(buf, content.media.mimeType ?? 'image/jpeg'));
+        } else {
+          verdicts.push(await this.vlm.reviewVideo(abs));
+        }
+      } catch (e) {
+        verdicts.push({ pass: true, riskLevel: 'none', hits: [{ word: `媒体读取失败:${(e as Error).message}`, position: 0 }] });
+      }
+    }
+
+    const merged: AiVerdict = {
+      pass: verdicts.every((v) => v.pass),
+      riskLevel: verdicts.some((v) => v.riskLevel === 'violation')
+        ? 'violation'
+        : verdicts.some((v) => v.riskLevel === 'suspect')
+          ? 'suspect'
+          : 'none',
+      hits: verdicts.flatMap((v) => v.hits).slice(0, 20),
+    };
     await this.prisma.auditLog.create({
       data: {
         action: 'AI_REVIEW',
         targetType: 'content',
         targetId: contentId,
-        detail: { riskLevel: verdict.riskLevel, hits: verdict.hits.slice(0, 20) } as never,
+        detail: { riskLevel: merged.riskLevel, hits: merged.hits.slice(0, 20), vlm: this.vlm.configured } as never,
       },
     });
-    const next: ContentStatus = verdict.pass ? 'MANUAL_REVIEW' : 'REJECTED';
-    await this.contents.transition(contentId, next, undefined, `AI:${verdict.riskLevel}`);
-    return { next, verdict };
+    const next: ContentStatus = merged.pass ? 'MANUAL_REVIEW' : 'REJECTED';
+    await this.contents.transition(contentId, next, undefined, `AI:${merged.riskLevel}`);
+    return { next, verdict: merged };
   }
 }
+
+import { resolve } from 'node:path';

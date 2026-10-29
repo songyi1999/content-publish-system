@@ -5,7 +5,6 @@
       <el-menu router default-active="/" class="menu">
         <el-menu-item v-for="m in menus" :key="m.path" :index="m.path">
           <span>{{ m.title }}</span>
-          <el-tag v-if="!m.ready" size="small" type="info" effect="plain" style="margin-left: 8px">开发中</el-tag>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -15,18 +14,25 @@
         <el-button link type="danger" @click="logout">退出登录</el-button>
       </el-header>
       <el-main>
+        <el-row :gutter="12" style="margin-bottom: 12px">
+          <el-col :span="6"><el-card shadow="never"><el-statistic title="终端在线 / 总数" :value="stats.devices" /></el-card></el-col>
+          <el-col :span="6"><el-card shadow="never"><el-statistic title="已发布内容（7日内更新）" :value="stats.publishedIn7d" /></el-card></el-col>
+          <el-col :span="6"><el-card shadow="never"><el-statistic title="待人工复审" :value="stats.contentsByStatus.MANUAL_REVIEW ?? 0" /></el-card></el-col>
+          <el-col :span="6"><el-card shadow="never"><el-statistic title="画面异常（累计）" :value="stats.screenshotAnomalies" /></el-card></el-col>
+        </el-row>
         <el-card>
-          <template #header>项目状态（M0 工程骨架已就绪）</template>
-          <el-timeline>
-            <el-timeline-item
-              v-for="m in milestones"
-              :key="m.name"
-              :type="m.type"
-              :timestamp="m.time"
-            >
-              {{ m.name }}
-            </el-timeline-item>
-          </el-timeline>
+          <template #header>运营概览（SY-04，每 30 秒刷新）</template>
+          <el-descriptions :column="3" border>
+            <el-descriptions-item label="用户数">{{ stats.users }}</el-descriptions-item>
+            <el-descriptions-item label="内容总数">{{ stats.contents }}</el-descriptions-item>
+            <el-descriptions-item label="终端数">{{ stats.devices }}</el-descriptions-item>
+            <el-descriptions-item label="草稿">{{ stats.contentsByStatus.DRAFT ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="已发布">{{ stats.contentsByStatus.PUBLISHED ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="已驳回">{{ stats.contentsByStatus.REJECTED ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="发布任务完成">{{ stats.tasksByStatus.DONE ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="待执行任务">{{ stats.tasksByStatus.PENDING ?? 0 }}</el-descriptions-item>
+            <el-descriptions-item label="已撤回">{{ stats.tasksByStatus.REVOKED ?? 0 }}</el-descriptions-item>
+          </el-descriptions>
         </el-card>
       </el-main>
     </el-container>
@@ -34,76 +40,58 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, onUnmounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { http } from '../api/http';
 
 const router = useRouter();
 const auth = useAuthStore();
 
 const menus = [
-  { path: '/', title: '工作台', ready: true },
-  { path: '/columns', title: '栏目管理', ready: true },
-  { path: '/contents', title: '内容管理', ready: true },
-  { path: '/media', title: '素材库', ready: true },
-  { path: '/programs', title: '节目编排', ready: true },
-  { path: '/schedules', title: '排期管理', ready: true },
-  { path: '/devices', title: '设备管理', ready: true },
-  { path: '/publish', title: '发布任务', ready: true },
-  { path: '/review', title: '审核中心', ready: true },
-  { path: '/logs', title: '日志审计', ready: true },
-  { path: '/users', title: '用户管理', ready: true },
-  { path: '/roles', title: '角色管理', ready: true },
+  { path: '/', title: '工作台' },
+  { path: '/columns', title: '栏目管理' },
+  { path: '/contents', title: '内容管理' },
+  { path: '/media', title: '素材库' },
+  { path: '/programs', title: '节目编排' },
+  { path: '/schedules', title: '排期管理' },
+  { path: '/devices', title: '设备管理' },
+  { path: '/publish', title: '发布任务' },
+  { path: '/review', title: '审核中心' },
+  { path: '/logs', title: '日志审计' },
+  { path: '/users', title: '用户管理' },
+  { path: '/roles', title: '角色管理' },
+  { path: '/settings', title: '系统设置' },
 ];
 
-const milestones = [
-  { name: 'M0 工程与 CI 就绪', time: '第 0.5 周', type: 'primary' },
-  { name: 'M1 账号权限底座（RBAC/JWT/日志）', time: '第 1.5 周', type: 'default' },
-  { name: 'M2 内容管理（栏目/素材/富文本）', time: '第 3 周', type: 'default' },
-  { name: 'M3 多格式导入转码（docx/HTML/MP4）', time: '第 4 周', type: 'default' },
-  { name: 'M4 设备与发布链路（心跳/下发/续传）', time: '第 6 周', type: 'default' },
-  { name: 'M5 播放器内核与双端客户端', time: '第 8.5 周', type: 'default' },
-  { name: 'M6 审核工作流 + AI', time: '第 9.5 周', type: 'default' },
-  { name: 'M7 节目编排与排期基础版', time: '第 11 周', type: 'default' },
-  { name: 'M8 终端运维增强（开关机/监播/更新）', time: '第 12.5 周', type: 'default' },
-  { name: 'M9 联调测试与试点上线', time: '第 13.5 周', type: 'default' },
-];
+interface StatsOverview { users: number; contents: number; devices: number; contentsByStatus: Record<string, number>; tasksByStatus: Record<string, number>; screenshotAnomalies: number; publishedIn7d: number }
+const stats = ref<StatsOverview>({ users: 0, contents: 0, devices: 0, contentsByStatus: {}, tasksByStatus: {}, screenshotAnomalies: 0, publishedIn7d: 0 });
+let timer: ReturnType<typeof setInterval> | undefined;
 
+async function load(): Promise<void> {
+  stats.value = (await http.get('/stats/overview')) as unknown as StatsOverview;
+}
 function logout(): void {
   auth.logout();
   router.push('/login');
 }
+onMounted(() => {
+  load();
+  timer = setInterval(load, 30_000);
+});
+onUnmounted(() => {
+  if (timer) clearInterval(timer);
+});
 </script>
 
 <style scoped>
-.aside {
-  background: #1a2330;
-}
-.logo {
-  height: 60px;
-  line-height: 60px;
-  text-align: center;
-  color: #fff;
-  font-size: 17px;
-  letter-spacing: 2px;
-}
-.menu {
-  border-right: none;
-  background: transparent;
-}
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #e4e7ed;
-}
+.aside { background: #1a2330; }
+.logo { height: 60px; line-height: 60px; text-align: center; color: #fff; font-size: 17px; letter-spacing: 2px; }
+.menu { border-right: none; background: transparent; }
+.header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e4e7ed; }
 </style>
 
 <style>
-.el-menu-item {
-  color: #c0c4cc !important;
-}
-.el-menu-item.is-active {
-  color: #fff !important;
-  background: #d4875a !important;
-}
+.el-menu-item { color: #c0c4cc !important; }
+.el-menu-item.is-active { color: #fff !important; background: #d4875a !important; }
 </style>

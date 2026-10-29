@@ -1,4 +1,5 @@
 import { Injectable, Global, Module } from '@nestjs/common';
+import { NotifyService } from './notify.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 export interface AuditInput {
@@ -56,7 +57,7 @@ export class AuditService {
 
 @Global()
 @Module({
-  providers: [AuditService],
-  exports: [AuditService],
+  providers: [AuditService, NotifyService],
+  exports: [AuditService, NotifyService],
 })
 export class AuditModule {}

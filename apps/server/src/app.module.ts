@@ -20,6 +20,7 @@ import { PublishModule } from './modules/publish/publish.module';
 import { ProgramsModule } from './modules/programs/programs.module';
 import { ReviewModule } from './modules/review/review.module';
 import { DeviceApiModule } from './modules/device-api/device-api.module';
+import { SystemModule } from './modules/system/system.module';
 
 @Module({
   imports: [
@@ -45,6 +46,7 @@ import { DeviceApiModule } from './modules/device-api/device-api.module';
     ProgramsModule,
     ReviewModule,
     DeviceApiModule,
+    SystemModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

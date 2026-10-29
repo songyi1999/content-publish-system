@@ -21,6 +21,7 @@ const router = createRouter({
     { path: '/devices', component: () => import('../views/DevicesView.vue'), meta: { requiresAuth: true } },
     { path: '/programs', component: () => import('../views/ProgramsView.vue'), meta: { requiresAuth: true } },
     { path: '/schedules', component: () => import('../views/SchedulesView.vue'), meta: { requiresAuth: true } },
+  { path: '/settings', component: () => import('../views/SettingsView.vue'), meta: { requiresAuth: true } },
   ],
 });
 

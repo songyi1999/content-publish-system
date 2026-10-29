@@ -63,6 +63,17 @@ export class ContentsController {
     return { ok: true };
   }
 
+  @Get(':id/versions')
+  versions(@Param('id') id: string) {
+    return this.contents.versions(id);
+  }
+
+  @Post(':id/versions/:vid/restore')
+  @Roles('admin', 'editor')
+  restore(@Param('id') id: string, @Param('vid') vid: string, @CurrentUser() me: JwtUser) {
+    return this.contents.restoreVersion(id, vid);
+  }
+
   /** 编辑提交审核（R6：编辑无发布权，submit 之后进入 AI 审核） */
   @Post(':id/submit')
   @Roles('admin', 'editor')

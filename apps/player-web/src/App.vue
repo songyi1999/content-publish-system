@@ -246,4 +246,13 @@ onUnmounted(() => {
 .rich { flex: 1; overflow: auto; padding: 3vh 4vw; font-size: 2.6vh; background: #fff; color: #222; }
 .rich :deep(img) { max-width: 100%; }
 .status { position: absolute; right: 8px; bottom: 4px; font-size: 12px; color: rgba(255, 255, 255, 0.35); }
+
+/* 竖屏适配（ED-02）：左图右文版式在竖屏下改为上下布局，字号改用最小边基准 */
+@media (orientation: portrait) {
+  .layout-left-right { flex-direction: column; }
+  .layout-left-right .zone-main { flex: 4; }
+  .zone-side { flex: 1; flex-direction: row; justify-content: space-around; }
+  .zone-side .clock { font-size: 4.5vh; }
+  .text-slide { font-size: min(6vw, 5vh); }
+}
 </style>

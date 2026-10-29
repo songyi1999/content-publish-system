@@ -78,9 +78,12 @@ export class ContentsService {
     validTo?: string;
     sort?: number;
   }) {
-    // 已发布内容修改后回到草稿（重新走审核）
+    // 已发布内容修改后回到草稿（重新走审核）；修改前留存版本快照（CM-06）
     const cur = await this.prisma.content.findUnique({ where: { id } });
     if (!cur) throw new NotFoundException('内容不存在');
+    await this.prisma.contentVersion.create({
+      data: { contentId: id, title: cur.title, body: (cur.body ?? undefined) as never },
+    });
     if (cur.status === ContentStatus.PUBLISHED) {
       await this.prisma.content.update({ where: { id }, data: { status: ContentStatus.DRAFT } });
       await this.prisma.publishTask.updateMany({ where: { contentId: id, status: 'DONE' }, data: { status: 'FAILED' } });
@@ -126,5 +129,25 @@ export class ContentsService {
     if (typeof b.html === 'string') parts.push(b.html.replace(/<[^>]+>/g, ' '));
     if (typeof b.text === 'string') parts.push(b.text);
     return parts.filter(Boolean).join('\n');
+  }
+
+  /** 版本历史（CM-06） */
+  async versions(contentId: string) {
+    return this.prisma.contentVersion.findMany({
+      where: { contentId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  /** 恢复到历史版本：应用快照并回到草稿重新走审核 */
+  async restoreVersion(contentId: string, versionId: string) {
+    const v = await this.prisma.contentVersion.findUnique({ where: { id: versionId } });
+    if (!v || v.contentId !== contentId) throw new NotFoundException('版本不存在');
+    const body = (v.body ?? {}) as Record<string, unknown>;
+    await this.update(contentId, { title: v.title, body });
+    if (body.columnId !== undefined) await this.prisma.content.update({ where: { id: contentId }, data: { columnId: String(body.columnId) } });
+    await this.prisma.content.update({ where: { id: contentId }, data: { status: 'DRAFT' } });
+    return { ok: true };
   }
 }

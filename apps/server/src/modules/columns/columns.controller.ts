@@ -31,9 +31,9 @@ export class ColumnsController {
 
   @Post()
   @Roles('admin', 'editor')
-  async create(@Body() body: { name: string; parentId?: string; sort?: number }, @CurrentUser() me: JwtUser) {
+  async create(@Body() body: { name: string; parentId?: string; sort?: number; groupIds?: string[] }, @CurrentUser() me: JwtUser) {
     const node = await this.prisma.columnNode.create({
-      data: { name: body.name, parentId: body.parentId, sort: body.sort ?? 0 },
+      data: { name: body.name, parentId: body.parentId, sort: body.sort ?? 0, groupIds: body.groupIds ?? [] },
     });
     await this.audit.log({ userId: me.sub, action: 'COLUMN_CREATE', targetType: 'column', targetId: node.id, detail: { name: body.name } });
     return { id: node.id };
@@ -41,7 +41,7 @@ export class ColumnsController {
 
   @Put(':id')
   @Roles('admin', 'editor')
-  async update(@Param('id') id: string, @Body() body: { name?: string; sort?: number; enabled?: boolean }, @CurrentUser() me: JwtUser) {
+  async update(@Param('id') id: string, @Body() body: { name?: string; sort?: number; enabled?: boolean; groupIds?: string[] }, @CurrentUser() me: JwtUser) {
     await this.prisma.columnNode.update({ where: { id }, data: body });
     await this.audit.log({ userId: me.sub, action: 'COLUMN_UPDATE', targetType: 'column', targetId: id, detail: body });
     return { ok: true };

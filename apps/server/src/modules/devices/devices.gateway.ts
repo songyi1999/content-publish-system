@@ -9,6 +9,7 @@ import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { DeviceCommand, DeviceEvent, HeartbeatPayload } from '@cps/shared';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotifyService } from '../../common/notify.service';
 
 interface OnlineEntry {
   socketId: string;
@@ -35,6 +36,7 @@ export class DevicesGateway implements OnGatewayConnection, OnGatewayDisconnect 
       if (entry.socketId === client.id) {
         this.online.delete(code);
         this.logger.log(`terminal offline: ${code}`);
+        void this.notify.send({ key: `offline:${code}`, content: `【内容发布系统】终端离线告警：${code}（${new Date().toLocaleString('zh-CN', { hour12: false })}）` });
         break;
       }
     }
@@ -78,5 +80,8 @@ export class DevicesGateway implements OnGatewayConnection, OnGatewayDisconnect 
     return [...this.online.entries()].map(([code, e]) => ({ code, ip: e.ip, lastSeen: e.lastSeen }));
   }
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notify: NotifyService,
+  ) {}
 }

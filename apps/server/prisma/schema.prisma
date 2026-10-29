@@ -40,6 +40,8 @@ model User {
 model ColumnNode {
   id       String       @id @default(cuid())
   name     String
+  /// 栏目-终端分组关联（CM-02）：空 = 对全部终端可见
+  groupIds String[]
   parentId String?
   parent   ColumnNode?  @relation("tree", fields: [parentId], references: [id])
   children ColumnNode[] @relation("tree")
@@ -84,6 +86,7 @@ model Content {
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   tasks     PublishTask[]
+  versions  ContentVersion[]
 }
 
 //终端管理（R3/R13/R14）
@@ -205,4 +208,25 @@ model AuditLog {
 
   @@index([userId, createdAt])
   @@index([action, createdAt])
+}
+
+
+// 内容版本快照（CM-06）
+
+model ContentVersion {
+  id        String   @id @default(cuid())
+  contentId String
+  content   Content  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  title     String
+  body      Json?
+  createdAt DateTime @default(now())
+
+  @@index([contentId, createdAt])
+}
+
+// 系统参数（SY-01）
+
+model AppParam {
+  key   String @id
+  value Json
 }

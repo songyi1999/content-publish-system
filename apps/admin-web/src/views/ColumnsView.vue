@@ -25,6 +25,11 @@
         <el-form-item label="名称"><el-input v-model="dlg.form.name" /></el-form-item>
         <el-form-item label="排序"><el-input-number v-model="dlg.form.sort" :min="0" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="dlg.form.enabled" /></el-form-item>
+        <el-form-item label="可见分组">
+          <el-select v-model="dlg.form.groupIds" multiple style="width: 100%" placeholder="不选 = 全部终端可见">
+            <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dlg.visible = false">取消</el-button>
@@ -39,27 +44,28 @@ import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { http } from '../api/http';
 
-interface TreeRow { id: string; name: string; parentId: string | null; sort: number; enabled: boolean; children: TreeRow[]; _count?: { contents: number } }
+interface TreeRow { id: string; name: string; parentId: string | null; sort: number; enabled: boolean; groupIds?: string[]; children: TreeRow[]; _count?: { contents: number } }
 const tree = ref<TreeRow[]>([]);
 const selected = ref<TreeRow | null>(null);
-const dlg = reactive({ visible: false, id: '', parentId: '', parentName: '', form: { name: '', sort: 0, enabled: true } });
+const dlg = reactive({ visible: false, id: '', parentId: '', parentName: '', form: { name: '', sort: 0, enabled: true, groupIds: [] as string[] } });
+const groups = ref<Array<{ id: string; name: string }>>([]);
 
 async function load(): Promise<void> { tree.value = (await http.get('/columns')) as unknown as TreeRow[]; }
 function onNodeClick(n: unknown): void { selected.value = n as TreeRow; }
 function open(node?: TreeRow | null): void {
   dlg.id = ''; dlg.parentId = node?.id ?? ''; dlg.parentName = node?.name ?? '';
-  dlg.form = { name: '', sort: 0, enabled: true };
+  dlg.form = { name: '', sort: 0, enabled: true, groupIds: [] };
   dlg.visible = true;
 }
 function edit(node: TreeRow): void {
   dlg.id = node.id; dlg.parentId = ''; dlg.parentName = '';
-  dlg.form = { name: node.name, sort: node.sort, enabled: node.enabled };
+  dlg.form = { name: node.name, sort: node.sort, enabled: node.enabled, groupIds: [...(node.groupIds ?? [])] };
   dlg.visible = true;
 }
 async function save(): Promise<void> {
   if (!dlg.form.name) { ElMessage.warning('名称必填'); return; }
   if (dlg.id) await http.put(`/columns/${dlg.id}`, dlg.form);
-  else await http.post('/columns', { name: dlg.form.name, parentId: dlg.parentId || undefined, sort: dlg.form.sort });
+  else await http.post('/columns', { name: dlg.form.name, parentId: dlg.parentId || undefined, sort: dlg.form.sort, groupIds: dlg.form.groupIds });
   dlg.visible = false; ElMessage.success('已保存'); load();
 }
 async function remove(node: TreeRow): Promise<void> {
@@ -69,7 +75,10 @@ async function remove(node: TreeRow): Promise<void> {
   else ElMessage.success('已删除');
   load();
 }
-onMounted(load);
+onMounted(async () => {
+  load();
+  groups.value = (await http.get('/device-groups')) as unknown as typeof groups.value;
+});
 defineExpose({ edit });
 </script>
 

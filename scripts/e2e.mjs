@@ -184,6 +184,58 @@ async function main() {
   r = await api('GET', '/api/device-api/version', { headers: { 'x-app-version': '0.0.1' } });
   check('TC-09 版本检查接口', r.status === 200 && 'latest' in r.data && r.data.upToDate === false);
 
+  /* ---- VLM 图片审核（AV-05，走自建 qwen3.8-flash 网关） ---- */
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAy0lEQVR4nO3SQQ0AIAADMUAmctCEQFRwr9bAksvmPnfw3wo2ELrj0RGhI0JHhI4IHRE6InRE6IjQEaEjQkeEjggdEToidEToiNARoSNCR4SOCB0ROiJ0ROiI0BGhI0JHhI4IHRE6InRE6IjQEaEjQkeEjggdEToidEToiNARoSNCR4SOCB0ROiJ0ROiI0BGhI0JHhI4IHRE6InRE6IjQEaEjQkeEjggdEToidEToiNARoSNCR4SOCB0ROiJ0ROiI0BGhI0JHhI4IPRoP/7MCMCSkbwgAAAAASUVORK5CYII=',
+    'base64',
+  );
+  const imgFd = new FormData();
+  imgFd.append('file', new Blob([png], { type: 'image/png' }), 'e2e.png');
+  r = await api('POST', '/api/media/upload', { token, body: imgFd, raw: true });
+  const mediaId = r.data?.id;
+  check('AV-05 图片素材上传', !!mediaId);
+
+  r = await api('POST', '/api/contents', { token, body: { title: 'E2E图片内容', type: 'image', mediaId } });
+  const imgContentId = r.data?.id;
+  await api('POST', `/api/contents/${imgContentId}/submit`, { token });
+  r = await api('POST', `/api/review/${imgContentId}/ai`, { token });
+  check('AV-05 图片经 VLM 审核进入人工复审', r.data?.next === 'MANUAL_REVIEW', `status=${r.status} data=${JSON.stringify(r.data).slice(0, 200)}`);
+  check('AV-08 VLM 审核留痕含判定', r.data?.verdict && typeof r.data.verdict.pass === 'boolean');
+
+  /* ---- 内容版本快照与恢复（CM-06） ---- */
+  r = await api('PUT', `/api/contents/${txtContentId}`, { token, body: { title: 'E2E测试内容-改名后' } });
+  r = await api('GET', `/api/contents/${txtContentId}/versions`, { token });
+  check('CM-06 修改自动留存版本快照', Array.isArray(r.data) && r.data.length >= 1);
+  const verId = r.data?.[0]?.id;
+  r = await api('POST', `/api/contents/${txtContentId}/versions/${verId}/restore`, { token });
+  check('CM-06 恢复历史版本回到草稿', r.data?.ok === true);
+
+  /* ---- 栏目-终端分组关联（CM-02） ---- */
+  r = await api('POST', '/api/columns', { token, body: { name: 'E2E受限栏目', groupIds: [groupId] } });
+  const restrictedCol = r.data?.id;
+  r = await api('GET', '/api/columns', { token });
+  const colNode = (r.data ?? []).flat().find?.((c) => c.id === restrictedCol) ?? (await findCol(r.data, restrictedCol));
+  async function findCol(nodes, id) { for (const n of nodes ?? []) { if (n.id === id) return n; const c = await findCol(n.children, id); if (c) return c; } return null; }
+  check('CM-02 栏目携带可见分组', Array.isArray(colNode?.groupIds) && colNode.groupIds.includes(groupId));
+
+  /* ---- 系统参数 + 灰度版本（SY-01/TC-11） ---- */
+  r = await api('PUT', '/api/system/params', { token, body: { latestVersion: '9.9.9', stableVersion: '0.1.0', grayGroupIds: [] } });
+  check('SY-01 参数写入', r.data?.ok === true);
+  r = await api('GET', '/api/device-api/version', { headers: { 'x-device-key': deviceKey, 'x-app-version': '0.1.0' } });
+  check('TC-09 版本接口返回最新版', r.data?.latest === '9.9.9' && r.data?.upToDate === false);
+
+  const fd3 = new FormData();
+  fd3.append('name', 'G3-' + Date.now());
+  r = await api('POST', '/api/device-groups', { token, body: fd3, raw: true });
+  const otherGroup = r.data?.id;
+  await api('PUT', '/api/system/params', { token, body: { grayGroupIds: [otherGroup] } });
+  r = await api('GET', '/api/device-api/version', { headers: { 'x-device-key': deviceKey } });
+  check('TC-11 非灰度分组拿到稳定版', r.data?.latest === '0.1.0');
+
+  /* ---- 运营统计（SY-04） ---- */
+  r = await api('GET', '/api/stats/overview', { token });
+  check('SY-04 统计概览', typeof r.data?.users === 'number' && typeof r.data?.devices === 'number' && !!r.data?.contentsByStatus);
+
   /* ---- 汇总 ---- */
   console.log(results.join('\n'));
   console.log(`\n========== 通过 ${passed} / ${passed + failed} ==========`);

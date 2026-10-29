@@ -37,6 +37,11 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       MEDIA_ROOT: /app/media
+      AI_REVIEW_BASE_URL: ${AI_REVIEW_BASE_URL:-}
+      AI_REVIEW_MODEL: ${AI_REVIEW_MODEL:-}
+      AI_REVIEW_API_KEY: ${AI_REVIEW_API_KEY:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      DOWNLOAD_RATE_MBPS: ${DOWNLOAD_RATE_MBPS:-8}
       PORT: '3000'
     volumes:
       - ./data/media:/app/media
