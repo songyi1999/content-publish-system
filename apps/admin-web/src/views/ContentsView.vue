@@ -23,6 +23,9 @@
           <el-option v-for="(v, k) in STATUS" :key="k" :label="v" :value="k" />
         </el-select>
       </el-form-item>
+      <el-form-item>
+        <el-input v-model="q.tag" placeholder="按标签筛选（CM-05）" clearable style="width: 170px" @change="load" />
+      </el-form-item>
     </el-form>
 
     <el-table :data="items" border v-loading="loading">
@@ -32,6 +35,14 @@
       </el-table-column>
       <el-table-column label="类型" width="90">
         <template #default="{ row }"><el-tag size="small">{{ row.type }}</el-tag></template>
+      </el-table-column>
+      <el-table-column label="标签" min-width="120">
+        <template #default="{ row }">
+          <el-tag v-for="t in row.tags ?? []" :key="t" size="small" type="warning" style="margin-right: 4px">{{ t }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="置顶" width="70">
+        <template #default="{ row }"><el-tag v-if="row.topped" size="small" type="danger">顶</el-tag></template>
       </el-table-column>
       <el-table-column label="状态" width="110">
         <template #default="{ row }">
@@ -61,6 +72,12 @@
         </el-form-item>
         <el-form-item label="有效期">
           <el-date-picker v-model="dlg.form.range" type="datetimerange" start-placeholder="开始（可空）" end-placeholder="结束（可空）" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="标签">
+          <el-select v-model="dlg.form.tags" multiple filterable allow-create default-first-option placeholder="输入后回车创建标签" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="置顶">
+          <el-switch v-model="dlg.form.topped" active-text="终端轮播置顶" />
         </el-form-item>
         <el-form-item label="正文">
           <div class="editor">
@@ -111,20 +128,20 @@ const STATUS: Record<string, string> = {
   DRAFT: '草稿', AI_REVIEW: '待AI审核', MANUAL_REVIEW: '待人工复审',
   APPROVED: '审核通过', PUBLISHED: '已发布', REJECTED: '已驳回',
 };
-interface ContentRow { id: string; title: string; type: string; status: string; column?: { name: string } | null; validFrom: string | null; validTo: string | null }
+interface ContentRow { id: string; title: string; type: string; status: string; column?: { name: string } | null; validFrom: string | null; validTo: string | null; tags?: string[]; topped?: boolean }
 
 const items = ref<ContentRow[]>([]);
 const total = ref(0);
 const page = ref(1);
 const loading = ref(false);
-const q = reactive({ keyword: '', status: '' });
+const q = reactive({ keyword: '', status: '', tag: '' });
 const columns = ref<Array<{ id: string; name: string; children?: unknown[] }>>([]);
 const editorRef = shallowRef();
 const htmlDlg = ref(false);
 const htmlInput = reactive({ title: '', html: '' });
 const dlg = reactive({
   visible: false, id: '',
-  form: { title: '', columnPath: [] as string[], range: null as [Date, Date] | null, html: '' },
+  form: { title: '', columnPath: [] as string[], range: null as [Date, Date] | null, html: '', tags: [] as string[], topped: false },
 });
 
 onBeforeUnmount(() => { editorRef.value?.destroy(); });
@@ -132,21 +149,23 @@ onBeforeUnmount(() => { editorRef.value?.destroy(); });
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const r = (await http.get(`/contents?page=${page.value}&pageSize=20&keyword=${q.keyword}&status=${q.status}`)) as unknown as { total: number; items: ContentRow[] };
+    const r = (await http.get(`/contents?page=${page.value}&pageSize=20&keyword=${q.keyword}&status=${q.status}&tag=${q.tag}`)) as unknown as { total: number; items: ContentRow[] };
     total.value = r.total; items.value = r.items;
   } finally { loading.value = false; }
 }
 
 function open(row?: ContentRow): void {
   dlg.id = row?.id ?? '';
-  dlg.form = { title: row?.title ?? '', columnPath: [], range: null, html: '' };
+  dlg.form = { title: row?.title ?? '', columnPath: [], range: null, html: '', tags: row?.tags ? [...row.tags] : [], topped: row?.topped ?? false };
   dlg.visible = true;
   if (row) {
     http.get(`/contents/${row.id}`).then((c) => {
-      const detail = c as unknown as { body?: { html?: string }, columnId?: string, validFrom?: string, validTo?: string };
+      const detail = c as unknown as { body?: { html?: string }, columnId?: string, validFrom?: string, validTo?: string, tags?: string[], topped?: boolean };
       dlg.form.html = detail.body?.html ?? '';
       if (detail.columnId) dlg.form.columnPath = [detail.columnId];
       if (detail.validFrom && detail.validTo) dlg.form.range = [new Date(detail.validFrom), new Date(detail.validTo)];
+      dlg.form.tags = detail.tags ?? [];
+      dlg.form.topped = detail.topped ?? false;
     });
   }
 }
@@ -158,6 +177,8 @@ async function save(): Promise<void> {
     body: { html: dlg.form.html },
     validFrom: dlg.form.range?.[0]?.toISOString(),
     validTo: dlg.form.range?.[1]?.toISOString(),
+    tags: dlg.form.tags,
+    topped: dlg.form.topped,
   };
   if (dlg.id) await http.put(`/contents/${dlg.id}`, payload);
   else await http.post('/contents', payload);

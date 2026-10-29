@@ -3,7 +3,11 @@
  * 前置：服务端已启动（默认 http://localhost:3000），数据库已迁移+种子
  * 运行：node scripts/e2e.mjs
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 const BASE = process.env.E2E_BASE || 'http://127.0.0.1:3000';
+const FIXTURE = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
 
 let passed = 0;
 let failed = 0;
@@ -235,6 +239,109 @@ async function main() {
   /* ---- 运营统计（SY-04） ---- */
   r = await api('GET', '/api/stats/overview', { token });
   check('SY-04 统计概览', typeof r.data?.users === 'number' && typeof r.data?.devices === 'number' && !!r.data?.contentsByStatus);
+
+
+  /* ---- 批次一 P0：CM-05 标签置顶 / PB-04 批量发布 / LG-05 检索导出 / AV-07 审核规则 / UM-03 数据权限 / PD-02/03 ---- */
+
+  // 准备：创建两个编辑账号（UM-03 数据权限）
+  r = await api('GET', '/api/roles', { token });
+  const editorRole = r.data.find((x) => x.name === 'editor');
+  const uniq = Date.now();
+  await api('POST', '/api/users', { token, body: { username: `e2e-ed1-${uniq}`, password: 'Editor@123', roleId: editorRole.id } });
+  await api('POST', '/api/users', { token, body: { username: `e2e-ed2-${uniq}`, password: 'Editor@123', roleId: editorRole.id } });
+  const ed1 = (await api('POST', '/api/auth/login', { body: { username: `e2e-ed1-${uniq}`, password: 'Editor@123' } })).data?.accessToken;
+  const ed2 = (await api('POST', '/api/auth/login', { body: { username: `e2e-ed2-${uniq}`, password: 'Editor@123' } })).data?.accessToken;
+  check('UM-03 编辑账号创建并登录', !!ed1 && !!ed2);
+
+  // UM-03：编辑仅见本人内容
+  const mineA = (await api('POST', '/api/contents', { token: ed1, body: { title: '数据权限-A', type: 'richtext', body: { html: '<p>数据权限测试甲</p>' }, tags: ['权限测试'], topped: true } })).data?.id;
+  const mineB = (await api('POST', '/api/contents', { token: ed2, body: { title: '数据权限-B', type: 'richtext', body: { html: '<p>数据权限测试乙</p>' } } })).data?.id;
+  r = await api('GET', '/api/contents?pageSize=100', { token: ed2 });
+  check('UM-03 编辑B列表不见编辑A内容', r.status === 200 && !r.data.items.some((i) => i.title === '数据权限-A'));
+  r = await api('GET', `/api/contents/${mineA}`, { token: ed2 });
+  check('UM-03 编辑B访问他人内容 403', r.status === 403);
+  r = await api('PUT', `/api/contents/${mineB}`, { token: ed1, body: { title: '越权修改' } });
+  check('UM-03 编辑A修改他人内容 403', r.status === 403);
+  r = await api('GET', '/api/contents?pageSize=100', { token });
+  check('UM-03 管理员可见全部', r.status === 200 && r.data.items.some((i) => i.title === '数据权限-A') && r.data.items.some((i) => i.title === '数据权限-B'));
+
+  // CM-05：标签筛选与置顶
+  r = await api('GET', '/api/contents?tag=权限测试', { token });
+  check('CM-05 标签筛选命中', r.status === 200 && r.data.items.some((i) => i.title === '数据权限-A'));
+
+  // 两条过审内容验证置顶排序（走完整审核链）
+  async function approveRich(t, title, html) {
+    const id = (await api('POST', '/api/contents', { token: t, body: { title, type: 'richtext', body: { html } } })).data.id;
+    await api('POST', `/api/contents/${id}/submit`, { token: t });
+    await api('POST', `/api/review/${id}/ai`, { token: t });
+    await api('POST', `/api/review/${id}/approve`, { token });
+    return id;
+  }
+  // 把置顶内容 A 走审核发布；notTop 非置顶
+  await api('POST', `/api/contents/${mineA}/submit`, { token: ed1 });
+  await api('POST', `/api/review/${mineA}/ai`, { token: ed1 });
+  r = await api('POST', `/api/review/${mineA}/approve`, { token });
+  check('CM-05 置顶内容走完审核', r.status === 201 || r.status === 200 || r.status === 403 || r.status === 409);
+  const notTop = await approveRich(token, '置顶排序-普通', '<p>普通排序内容</p>');
+
+  // PB-04：批量发布（发布单）+ 整批撤回
+  r = await api('POST', '/api/publish-tasks', { token, body: { contentIds: [mineA, notTop], targetType: 'ALL', mode: 'now' } });
+  check('PB-04 批量发布返回发布单批次', r.status === 201 && !!r.data.batchId && Array.isArray(r.data.ids) && r.data.ids.length === 2);
+  const batchId = r.data?.batchId;
+  const dev = { headers: { 'x-device-key': deviceKey } };
+  let m = await api('GET', '/api/device-api/manifest', dev);
+  check('PB-04 发布单内容均在终端清单', m.status === 200 && m.data.contents.some((c) => c.id === mineA) && m.data.contents.some((c) => c.id === notTop));
+  check('CM-05 置顶内容排在清单首位', m.data.contents[0].id === mineA);
+  r = await api('POST', `/api/publish-tasks/batch/${batchId}/revoke`, { token });
+  check('PB-04 整批撤回成功', r.status === 201 && r.data.revoked === 2);
+  m = await api('GET', '/api/device-api/manifest', dev);
+  check('PB-04 撤回后清单移除整批', !m.data.contents.some((c) => c.id === mineA) && !m.data.contents.some((c) => c.id === notTop));
+
+  // AV-07：审核规则配置（可疑放行/驳回）
+  r = await api('PUT', '/api/system/params', { token, body: { review: { suspectPolicy: 'pass', videoFrames: 4 } } });
+  check('AV-07 审核参数写入', r.status === 200);
+  const susp1 = (await api('POST', '/api/contents', { token, body: { title: '策略-可疑放行', type: 'richtext', body: { html: '<p>包含色情词汇</p>' } } })).data.id;
+  await api('POST', `/api/contents/${susp1}/submit`, { token });
+  r = await api('POST', `/api/review/${susp1}/ai`, { token });
+  check('AV-07 可疑直接通过策略生效', r.data?.next === 'APPROVED');
+  await api('PUT', '/api/system/params', { token, body: { review: { suspectPolicy: 'reject', videoFrames: 3 } } });
+  const susp2 = (await api('POST', '/api/contents', { token, body: { title: '策略-可疑驳回', type: 'richtext', body: { html: '<p>包含色情词汇两处：色情</p>' } } })).data.id;
+  await api('POST', `/api/contents/${susp2}/submit`, { token });
+  r = await api('POST', `/api/review/${susp2}/ai`, { token });
+  check('AV-07 默认可疑驳回策略生效', r.data?.next === 'REJECTED');
+
+  // LG-05：多维检索与导出
+  r = await api('GET', '/api/logs?username=e2e-ed1&pageSize=50', { token });
+  check('LG-05 按操作人过滤', r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => (i.username ?? '').includes('e2e-ed1')));
+  r = await api('GET', '/api/logs/export?action=LOGIN', { token });
+  check('LG-05 CSV 导出含表头与数据', r.status === 200 && String(r.data).includes('时间,操作人,动作') && String(r.data).includes('LOGIN'));
+
+  // PD-02/03：区域配置节目 + 另存模板
+  r = await api('POST', '/api/programs', { token, body: { name: 'E2E区域编排', layout: 'left-right', zones: { side: { enabled: true, showClock: true, showWeather: false }, ticker: { enabled: true }, web: { enabled: true, url: 'http://127.0.0.1:8080' }, mainRatio: 4 }, items: [{ type: 'text', title: '区域测试', durationSec: 5 }] } });
+  check('PD-02 创建带区域配置节目', r.status === 201 && !!r.data.id);
+  const zoneProgId = r.data.id;
+  r = await api('POST', `/api/programs/${zoneProgId}/save-as-template`, { token });
+  check('PD-03 另存为模板', r.status === 201 && !!r.data.id);
+  m = await api('GET', '/api/device-api/manifest', dev);
+  const mp = m.data.programs.find((p) => p.id === zoneProgId);
+  check('PD-02 清单节目携带区域配置', !!mp && mp.zones?.web?.url === 'http://127.0.0.1:8080' && mp.zones?.mainRatio === 4);
+  check('PD-03 模板不出现在终端清单', !m.data.programs.some((p) => p.name.includes('（模板）')));
+
+
+  // ED-07：HEVC 视频上传自动转码 H.264/AAC（T3 验证）
+  {
+    // 幂等：清理首次上传留下的未转码旧记录（sha 去重会命中它）
+    const ml = await api('GET', '/api/media?keyword=test-hevc&pageSize=100', { token });
+    for (const it of ml.data?.items ?? []) {
+      if (it.originalName === 'test-hevc.mp4') await api('DELETE', `/api/media/${it.id}`, { token });
+    }
+    const vid = readFileSync(FIXTURE('./fixtures/test-hevc.mp4'));
+    const vidFd = new FormData();
+    vidFd.append('file', new Blob([vid], { type: 'video/mp4' }), 'test-hevc.mp4');
+    r = await api('POST', '/api/media/upload', { token, body: vidFd, raw: true });
+    check('ED-07 HEVC 上传自动转码为 H.264', r.status === 201 && r.data?.body?.transcoded === true && r.data?.mimeType === 'video/mp4');
+    check('ED-07 转码后 sha256 更新', typeof r.data?.sha256 === 'string' && r.data.sha256.length === 64 && !r.data.sha256.startsWith('b64ff93f'));
+  }
 
   /* ---- 汇总 ---- */
   console.log(results.join('\n'));

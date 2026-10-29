@@ -11,7 +11,7 @@ export class PublishController {
   @Post()
   @Roles('admin', 'auditor', 'publisher')
   create(
-    @Body() body: { contentId: string; targetType: 'ALL' | 'GROUP' | 'DEVICE'; targetIds?: string[]; mode?: 'now' | 'scheduled'; startAt?: string },
+    @Body() body: { contentId?: string; contentIds?: string[]; targetType: 'ALL' | 'GROUP' | 'DEVICE'; targetIds?: string[]; mode?: 'now' | 'scheduled'; startAt?: string },
     @CurrentUser() me: JwtUser,
   ) {
     return this.publish.createTask(body, me.sub);
@@ -24,6 +24,13 @@ export class PublishController {
       pageSize: pageSize ? Number(pageSize) : undefined,
       status,
     });
+  }
+
+  /** 整批撤回（PB-04）：发布单内全部任务下架 */
+  @Post('batch/:batchId/revoke')
+  @Roles('admin', 'auditor', 'publisher')
+  revokeBatch(@Param('batchId') batchId: string, @CurrentUser() me: JwtUser) {
+    return this.publish.revokeBatch(batchId, me.sub);
   }
 
   @Post(':id/revoke')

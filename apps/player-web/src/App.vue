@@ -21,9 +21,9 @@
       <p class="net" :class="{ offline: !online }">{{ online ? '已连接服务器' : '服务器不可达，稍后重试（离线播放不受影响）' }}</p>
     </div>
 
-    <!-- 播放：按排期选节目，按版式渲染（R11/R12/R2） -->
+    <!-- 播放：按排期选节目，按版式渲染（R11/R12/R2/PD-02 区域配置） -->
     <div v-else class="player" :class="`layout-${currentLayout}`">
-      <div class="zone-main">
+      <div class="zone-main" :style="zoneStyles.main">
         <template v-if="playing">
           <video v-if="playing.type === 'video' && playing.src" :src="playing.src" autoplay muted loop playsinline ref="videoEl" @error="next" />
           <img v-else-if="playing.type === 'image' && playing.src" :src="playing.src" ref="imgEl" />
@@ -33,14 +33,23 @@
           </div>
         </template>
       </div>
-      <div v-if="currentLayout === 'video-ticker'" class="zone-ticker">
+      <div v-if="showTicker" class="zone-ticker">
         <div class="ticker-inner">{{ tickerText }}</div>
       </div>
-      <div v-if="currentLayout === 'left-right'" class="zone-side">
-        <div class="weather" v-if="weather">{{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</div>
-        <div class="clock">{{ clockTime }}</div>
+      <div v-if="showSide" class="zone-side" :style="zoneStyles.side">
+        <div class="weather" v-if="zones.side?.showWeather !== false && weather">{{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</div>
+        <div class="clock" v-if="zones.side?.showClock !== false">{{ clockTime }}</div>
         <div class="title">{{ programName }}</div>
       </div>
+      <div v-if="showWeb" class="zone-web" :style="zoneStyles.web">
+        <iframe :src="zones.web?.url" class="web-frame" />
+      </div>
+    </div>
+
+    <!-- 触摸导航（TC-03 基础交互）：点按呼出，选节目即切；60 秒无操作自动隐藏并回默认轮播 -->
+    <div v-if="phase === 'playing' && navVisible" class="nav-bar">
+      <div class="nav-item" :class="{ active: !manualProgramId }" @click.stop="pickManual('')">默认轮播</div>
+      <div v-for="p in manifest?.programs ?? []" :key="p.id" class="nav-item" :class="{ active: manualProgramId === p.id }" @click.stop="pickManual(p.id)">{{ p.name }}</div>
     </div>
 
     <div v-if="phase === 'playing'" class="status">{{ online ? '' : '离线自治播放中 · ' }}{{ clockTime }}<span v-if="weather"> · {{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</span></div>
@@ -54,7 +63,7 @@ import { activate, connectHeartbeat, fetchManifest, loadConfig, platformDefaultB
 import { syncItems, getMedia } from './cache';
 import { locateInPlaylist, pickActiveSlot } from '@cps/player-core';
 import { fetchWeather, weatherEmoji, type WeatherNow } from './weather';
-import type { PlayableItem, Program } from '@cps/shared';
+import type { PlayableItem, Program, ProgramZones } from '@cps/shared';
 
 type Phase = 'activating' | 'syncing' | 'playing';
 
@@ -70,6 +79,9 @@ const programName = ref('');
 const playStart = ref(0);
 const currentItems = ref<PlayableItem[]>([]);
 const currentLayout = ref<Program['layout']>('full');
+const currentZones = ref<ProgramZones>({});
+const manualProgramId = ref<string | null>(null);
+const navVisible = ref(false);
 const tickerText = ref('欢迎使用内容集中发布系统');
 const lastInteraction = ref(Date.now());
 const weather = ref<WeatherNow | null>(null);
@@ -93,13 +105,44 @@ const playing = computed<{ type: string; src?: string; html?: string; title?: st
   return { type: 'text', title: it.title ?? '' };
 });
 
+/** PD-02 区域配置渲染：侧栏/字幕/网页区独立开关与占比 */
+const zones = computed(() => currentZones.value);
+const webEnabled = computed(() => zones.value.web?.enabled === true && !!zones.value.web?.url);
+const showTicker = computed(() => currentLayout.value === 'video-ticker' && zones.value.ticker?.enabled !== false);
+const showSide = computed(() => {
+  if (currentLayout.value !== 'left-right' && currentLayout.value !== 'three-col') return false;
+  if (currentLayout.value === 'left-right') return zones.value.side?.enabled !== false && !webEnabled.value;
+  return zones.value.side?.enabled !== false;
+});
+const showWeb = computed(() => webEnabled.value && (currentLayout.value === 'left-right' || currentLayout.value === 'three-col'));
+const zoneStyles = computed(() => ({
+  main: currentLayout.value === 'left-right' || currentLayout.value === 'three-col' ? { flex: String(zones.value.mainRatio ?? 3) } : undefined,
+  side: { flex: String(zones.value.side?.ratio ?? 1) },
+  web: { flex: String(zones.value.web?.ratio ?? 1) },
+}));
+
 const blobUrls = ref(new Map<string, string>());
 
 function next(): void { playStart.value = Date.now() - 1e9; }
 
 function wake(): void {
   lastInteraction.value = Date.now();
+  if (phase.value === 'playing') navVisible.value = !navVisible.value;
   void document.documentElement.requestFullscreen?.().catch(() => undefined);
+}
+
+/** 触摸切换节目（TC-03）：本地立即生效，60 秒无操作由计时器收回默认轮播 */
+function pickManual(id: string): void {
+  lastInteraction.value = Date.now();
+  if (!id) { manualProgramId.value = null; applySchedule(); return; }
+  const p = manifest.value?.programs.find((x) => x.id === id);
+  if (!p) return;
+  manualProgramId.value = id;
+  currentItems.value = p.items;
+  currentLayout.value = p.layout ?? 'full';
+  currentZones.value = (p.zones ?? {}) as ProgramZones;
+  programName.value = p.name;
+  playStart.value = Date.now();
 }
 
 async function doActivate(): Promise<void> {
@@ -154,11 +197,13 @@ function applySchedule(): void {
     if (p) {
       currentItems.value = p.items;
       currentLayout.value = p.layout ?? 'full';
+      currentZones.value = (p.zones ?? {}) as ProgramZones;
       programName.value = p.name;
       playStart.value = Date.now();
       return;
     }
   }
+  currentZones.value = {};
   currentLayout.value = 'full';
   programName.value = '默认轮播';
   if (currentItems.value !== m.contents) {
@@ -172,9 +217,13 @@ function startPlaying(): void {
   applySchedule();
   timer = setInterval(() => {
     clockTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+    // 无人交互 60 秒：退出手动节目与导航栏（TC-03），回默认排期
+    if (Date.now() - lastInteraction.value > 60_000 && (manualProgramId.value || navVisible.value)) {
+      manualProgramId.value = null;
+      navVisible.value = false;
+    }
+    if (manualProgramId.value) return; // 手动选择的节目保持播放
     applySchedule();
-    // 无人交互 60 秒自动回默认节目（触摸场景）
-    if (Date.now() - lastInteraction.value > 60_000 && currentLayout.value !== 'full') applySchedule();
   }, 1_000);
   syncTimer = setInterval(() => void syncLoop().then(applySchedule), 60_000);
   shotTimer = setInterval(() => void captureAndUpload(), 30 * 60_000); // 30 分钟监播（R14）
@@ -256,6 +305,11 @@ onUnmounted(() => {
 .rich { flex: 1; overflow: auto; padding: 3vh 4vw; font-size: 2.6vh; background: #fff; color: #222; }
 .rich :deep(img) { max-width: 100%; }
 .status { position: absolute; right: 8px; bottom: 4px; font-size: 12px; color: rgba(255, 255, 255, 0.35); }
+.nav-bar { position: absolute; left: 0; right: 0; bottom: 34px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; z-index: 10; padding: 0 12px; }
+.nav-item { background: rgba(20, 20, 20, 0.82); border: 1px solid #555; color: #fff; padding: 10px 18px; border-radius: 6px; font-size: 16px; cursor: pointer; }
+.nav-item.active { border-color: #d4875a; color: #d4875a; }
+.zone-web { flex: 1; overflow: hidden; background: #fff; }
+.web-frame { width: 100%; height: 100%; border: none; }
 
 /* 竖屏适配（ED-02）：左图右文版式在竖屏下改为上下布局，字号改用最小边基准 */
 @media (orientation: portrait) {

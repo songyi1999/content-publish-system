@@ -3,7 +3,15 @@
     <template #header>
       <div class="bar">
         <span>日志审计（R7 全程留痕）</span>
-        <el-input v-model="action" placeholder="按动作过滤，如 LOGIN" style="width: 220px" clearable @change="load" />
+        <div class="filters">
+          <el-select v-model="type" clearable placeholder="日志类型" style="width: 140px" @change="load">
+            <el-option v-for="t in TYPES" :key="t.v" :label="t.label" :value="t.v" />
+          </el-select>
+          <el-input v-model="action" placeholder="动作关键字" style="width: 160px" clearable @change="load" />
+          <el-input v-model="username" placeholder="操作人" style="width: 120px" clearable @change="load" />
+          <el-date-picker v-model="range" type="datetimerange" start-placeholder="开始" end-placeholder="结束" style="width: 340px" @change="load" />
+          <el-button @click="exportCsv">导出 CSV</el-button>
+        </div>
       </div>
     </template>
     <el-table :data="items" border v-loading="loading">
@@ -25,26 +33,65 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { http } from '../api/http';
+import { ElMessage } from 'element-plus';
+import { http, getRaw } from '../api/http';
+
+/** 日志类型（LG-05）：按动作前缀归类检索 */
+const TYPES = [
+  { v: 'LOGIN', label: '登录日志' },
+  { v: 'CONTENT', label: '内容操作' },
+  { v: 'PUBLISH', label: '发布操作' },
+  { v: 'DEVICE', label: '终端事件' },
+  { v: 'AI', label: 'AI 审核' },
+  { v: 'PARAM', label: '参数变更' },
+] as const;
 
 const items = ref<Array<Record<string, unknown>>>([]);
 const total = ref(0);
 const page = ref(1);
 const action = ref('');
+const username = ref('');
+const type = ref('');
+const range = ref<[Date, Date] | null>(null);
 const loading = ref(false);
+
+function qs(): string {
+  const p = new URLSearchParams();
+  if (action.value) p.set('action', action.value);
+  if (username.value) p.set('username', username.value);
+  if (range.value) {
+    p.set('from', range.value[0].toISOString());
+    p.set('to', range.value[1].toISOString());
+  }
+  return p.toString();
+}
 
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const r = (await http.get(`/logs?page=${page.value}&pageSize=20${action.value ? `&action=${action.value}` : ''}`)) as unknown as { total: number; items: Array<Record<string, unknown>> };
+    const t = type.value ? `&action=${type.value}` : '';
+    const r = (await http.get(`/logs?page=${page.value}&pageSize=20${t}&${qs()}`)) as unknown as { total: number; items: Array<Record<string, unknown>> };
     total.value = r.total; items.value = r.items;
   } finally { loading.value = false; }
 }
+
+async function exportCsv(): Promise<void> {
+  const t = type.value ? `&action=${type.value}` : '';
+  const blob = await getRaw(`/logs/export?${t}&${qs()}`);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `audit-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  ElMessage.success('已导出');
+}
+
 function onPage(p: number): void { page.value = p; load(); }
 onMounted(load);
 </script>
 
 <style scoped>
 .bar { display: flex; justify-content: space-between; align-items: center; }
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .detail { font-size: 12px; color: #909399; word-break: break-all; }
 </style>

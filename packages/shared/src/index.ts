@@ -17,7 +17,7 @@ export type ContentStatus = (typeof ContentStatus)[keyof typeof ContentStatus];
 /** 允许的状态迁移；发布仅可从 APPROVED 触发（编辑-审核-发布职责分离） */
 export const CONTENT_TRANSITIONS: Record<ContentStatus, ContentStatus[]> = {
   DRAFT: [ContentStatus.AI_REVIEW],
-  AI_REVIEW: [ContentStatus.MANUAL_REVIEW, ContentStatus.REJECTED],
+  AI_REVIEW: [ContentStatus.MANUAL_REVIEW, ContentStatus.APPROVED, ContentStatus.REJECTED],
   MANUAL_REVIEW: [ContentStatus.APPROVED, ContentStatus.REJECTED],
   APPROVED: [ContentStatus.PUBLISHED],
   PUBLISHED: [],
@@ -113,12 +113,21 @@ export interface PlayableItem {
   sha256?: string;
 }
 
+/** 区域配置（R11/PD-02）：各区域独立开关与占比；web 为网页组件区 */
+export interface ProgramZones {
+  side?: { enabled?: boolean; showClock?: boolean; showWeather?: boolean; ratio?: number };
+  ticker?: { enabled?: boolean };
+  web?: { enabled?: boolean; url?: string; ratio?: number };
+  mainRatio?: number;
+}
+
 export interface Program {
   id: string;
   name: string;
   items: PlayableItem[];
   /** 分屏版式模板标识（R11 模板化编排） */
   layout?: 'full' | 'left-right' | 'three-col' | 'video-ticker';
+  zones?: ProgramZones;
 }
 
 /* ---------------- REST DTO ---------------- */

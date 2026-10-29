@@ -51,8 +51,18 @@ export class ReviewService {
     return { pass: false, riskLevel: hits.length >= 3 ? 'violation' : 'suspect', hits };
   }
 
-  /** 提交后触发：文本 DFA + 图片/视频 VLM → 全部通过进人工复审；命中驳回 */
+  /** 审核规则（AV-07）：可疑处置策略与视频抽帧数可配置；违规(violation)始终驳回 */
+  private async reviewConfig(): Promise<{ suspectPolicy: 'reject' | 'manual' | 'pass'; videoFrames: number }> {
+    const row = await this.prisma.appParam.findUnique({ where: { key: 'review' } });
+    const v = (row?.value ?? {}) as { suspectPolicy?: string; videoFrames?: number };
+    const suspectPolicy = v.suspectPolicy === 'pass' || v.suspectPolicy === 'manual' ? v.suspectPolicy : 'reject';
+    const videoFrames = typeof v.videoFrames === 'number' && v.videoFrames >= 1 && v.videoFrames <= 6 ? Math.round(v.videoFrames) : 3;
+    return { suspectPolicy, videoFrames };
+  }
+
+  /** 提交后触发：文本 DFA + 图片/视频 VLM → 按审核规则路由（AV-07） */
   async runAiReview(contentId: string): Promise<{ next: ContentStatus; verdict: AiVerdict }> {
+    const cfg = await this.reviewConfig();
     const text = await this.contents.extractText(contentId);
     const verdicts: AiVerdict[] = [this.scanText(text)];
 
@@ -64,7 +74,7 @@ export class ReviewService {
         if (content.media.kind === 'image') {
           verdicts.push(await this.vlm.reviewImage(buf, content.media.mimeType ?? 'image/jpeg'));
         } else {
-          verdicts.push(await this.vlm.reviewVideo(abs));
+          verdicts.push(await this.vlm.reviewVideo(abs, cfg.videoFrames));
         }
       } catch (e) {
         verdicts.push({ pass: true, riskLevel: 'none', hits: [{ word: `媒体读取失败:${(e as Error).message}`, position: 0 }] });
@@ -88,7 +98,10 @@ export class ReviewService {
         detail: { riskLevel: merged.riskLevel, hits: merged.hits.slice(0, 20), vlm: this.vlm.configured } as never,
       },
     });
-    const next: ContentStatus = merged.pass ? 'MANUAL_REVIEW' : 'REJECTED';
+    let next: ContentStatus;
+    if (merged.riskLevel === 'violation') next = 'REJECTED';
+    else if (merged.riskLevel === 'suspect') next = cfg.suspectPolicy === 'pass' ? 'APPROVED' : cfg.suspectPolicy === 'manual' ? 'MANUAL_REVIEW' : 'REJECTED';
+    else next = 'MANUAL_REVIEW';
     await this.contents.transition(contentId, next, undefined, `AI:${merged.riskLevel}`);
     return { next, verdict: merged };
   }

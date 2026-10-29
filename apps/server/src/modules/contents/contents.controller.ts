@@ -20,27 +20,30 @@ export class ContentsController {
     @Query('columnId') columnId?: string,
     @Query('status') status?: string,
     @Query('keyword') keyword?: string,
+    @Query('tag') tag?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @CurrentUser() me?: JwtUser,
   ) {
     return this.contents.list({
       columnId,
       status,
       keyword,
+      tag,
       page: page ? Number(page) : undefined,
       pageSize: pageSize ? Number(pageSize) : undefined,
-    });
+    }, me);
   }
 
   @Get(':id')
-  get(@Param('id') id: string) {
-    return this.contents.get(id);
+  get(@Param('id') id: string, @CurrentUser() me?: JwtUser) {
+    return this.contents.get(id, me);
   }
 
   @Post()
   @Roles('admin', 'editor')
   async create(@Body() body: Record<string, unknown>, @CurrentUser() me: JwtUser) {
-    const r = await this.contents.create(body as never);
+    const r = await this.contents.create(body as never, me.sub);
     await this.audit.log({ userId: me.sub, action: 'CONTENT_CREATE', targetType: 'content', targetId: r.id });
     return r;
   }
@@ -48,7 +51,7 @@ export class ContentsController {
   @Put(':id')
   @Roles('admin', 'editor')
   async update(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentUser() me: JwtUser) {
-    const r = await this.contents.update(id, body as never);
+    const r = await this.contents.update(id, body as never, me);
     await this.audit.log({ userId: me.sub, action: 'CONTENT_UPDATE', targetType: 'content', targetId: id });
     return r;
   }
@@ -71,13 +74,13 @@ export class ContentsController {
   @Post(':id/versions/:vid/restore')
   @Roles('admin', 'editor')
   restore(@Param('id') id: string, @Param('vid') vid: string, @CurrentUser() me: JwtUser) {
-    return this.contents.restoreVersion(id, vid);
+    return this.contents.restoreVersion(id, vid, me);
   }
 
   /** 编辑提交审核（R6：编辑无发布权，submit 之后进入 AI 审核） */
   @Post(':id/submit')
   @Roles('admin', 'editor')
   submit(@Param('id') id: string, @CurrentUser() me: JwtUser) {
-    return this.contents.transition(id, 'AI_REVIEW' as ContentStatus, me.sub);
+    return this.contents.transition(id, 'AI_REVIEW' as ContentStatus, me.sub, undefined, me);
   }
 }

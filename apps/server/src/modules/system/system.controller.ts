@@ -21,6 +21,9 @@ const PARAM_KEYS = [
   'latestVersion',
   'stableVersion',
   'grayGroupIds',
+  'downloadWindow',
+  'passwordPolicy',
+  'review',
 ] as const;
 
 @Controller('system')

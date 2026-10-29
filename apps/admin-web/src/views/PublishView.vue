@@ -19,12 +19,19 @@
           <el-tag size="small" :type="{ DONE: 'success', PENDING: 'warning', REVOKED: 'info', FAILED: 'danger' }[row.status as string] ?? 'info'">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="批次" width="110">
+        <template #default="{ row }">
+          <el-tag v-if="row.batchId" size="small" type="warning">发布单 {{ row.batchId.slice(0, 6) }}</el-tag>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false }) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="120">
+      <el-table-column label="操作" width="180">
         <template #default="{ row }">
           <el-button v-if="row.status === 'DONE'" size="small" type="danger" @click="revoke(row)">撤回</el-button>
+          <el-button v-if="row.batchId && row.status === 'DONE'" size="small" type="danger" plain @click="revokeBatch(row.batchId)">整批撤回</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -33,7 +40,7 @@
     <el-dialog v-model="dlg.visible" title="创建发布任务" width="520">
       <el-form label-width="90px">
         <el-form-item label="内容">
-          <el-select v-model="dlg.form.contentId" filterable style="width: 100%" placeholder="仅显示审核通过/已发布内容">
+          <el-select v-model="dlg.form.contentIds" multiple filterable style="width: 100%" placeholder="可多选组成发布单（PB-04）">
             <el-option v-for="c in approved" :key="c.id" :label="c.title" :value="c.id" />
           </el-select>
         </el-form-item>
@@ -77,7 +84,7 @@ import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { http } from '../api/http';
 
-interface Task { id: string; contentId: string; content?: { title: string } | null; targetType: string; status: string; createdAt: string }
+interface Task { id: string; contentId: string; content?: { title: string } | null; targetType: string; status: string; createdAt: string; batchId?: string | null }
 const items = ref<Task[]>([]);
 const total = ref(0);
 const page = ref(1);
@@ -87,7 +94,7 @@ const groups = ref<Array<{ id: string; name: string }>>([]);
 const devices = ref<Array<{ id: string; code: string; name: string | null }>>([]);
 const dlg = reactive({
   visible: false,
-  form: { contentId: '', targetType: 'ALL', targetIds: [] as string[], mode: 'now', startAt: null as Date | null },
+  form: { contentIds: [] as string[], targetType: 'ALL', targetIds: [] as string[], mode: 'now', startAt: null as Date | null },
 });
 
 async function load(): Promise<void> {
@@ -98,19 +105,24 @@ async function load(): Promise<void> {
   } finally { loading.value = false; }
 }
 function open(): void {
-  dlg.form = { contentId: '', targetType: 'ALL', targetIds: [], mode: 'now', startAt: null };
+  dlg.form = { contentIds: [], targetType: 'ALL', targetIds: [], mode: 'now', startAt: null };
   dlg.visible = true;
 }
 async function save(): Promise<void> {
-  if (!dlg.form.contentId) { ElMessage.warning('请选择内容'); return; }
-  await http.post('/publish-tasks', {
-    contentId: dlg.form.contentId,
+  if (dlg.form.contentIds.length === 0) { ElMessage.warning('请选择内容'); return; }
+  const r = (await http.post('/publish-tasks', {
+    contentIds: dlg.form.contentIds,
     targetType: dlg.form.targetType,
     targetIds: dlg.form.targetIds,
     mode: dlg.form.mode,
     startAt: dlg.form.startAt?.toISOString(),
-  });
-  dlg.visible = false; ElMessage.success('发布任务已创建'); load();
+  })) as unknown as { batchId?: string };
+  dlg.visible = false; ElMessage.success(r.batchId ? `发布单已创建（${dlg.form.contentIds.length} 条内容）` : '发布任务已创建'); load();
+}
+async function revokeBatch(batchId: string): Promise<void> {
+  await ElMessageBox.confirm('整批撤回：发布单内全部内容将从终端删除', '确认整批撤回');
+  await http.post(`/publish-tasks/batch/${batchId}/revoke`);
+  ElMessage.success('发布单已整批撤回'); load();
 }
 async function revoke(row: Task): Promise<void> {
   await ElMessageBox.confirm('撤回后终端将同步删除该内容', '确认撤回');

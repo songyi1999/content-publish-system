@@ -14,6 +14,19 @@
       <el-form-item label="下载限速（MB/s）">
         <el-input-number v-model="params.downloadRateMbps" :min="1" :max="100" />
       </el-form-item>
+      <el-divider>审核规则（AV-07）</el-divider>
+      <el-form-item label="可疑处置策略">
+        <el-select v-model="params.reviewSuspectPolicy" style="width: 220px">
+          <el-option label="驳回（严格）" value="reject" />
+          <el-option label="送人工复审" value="manual" />
+          <el-option label="直接通过（宽松）" value="pass" />
+        </el-select>
+        <span class="tip">违规命中始终自动驳回，不受此策略影响</span>
+      </el-form-item>
+      <el-form-item label="视频抽帧数">
+        <el-input-number v-model="params.reviewVideoFrames" :min="1" :max="6" />
+        <span class="tip">视频送审时均匀抽取的帧数</span>
+      </el-form-item>
       <el-divider>客户端版本与灰度（TC-09/TC-11）</el-divider>
       <el-form-item label="最新版本（灰度）">
         <el-input v-model="params.latestVersion" placeholder="如 0.2.0" style="width: 160px" />
@@ -60,6 +73,8 @@ const params = reactive({
   latestVersion: '',
   stableVersion: '',
   grayGroupIds: [] as string[],
+  reviewSuspectPolicy: 'reject',
+  reviewVideoFrames: 3,
 });
 
 async function load(): Promise<void> {
@@ -70,11 +85,15 @@ async function load(): Promise<void> {
   params.latestVersion = (p.latestVersion as string) ?? '';
   params.stableVersion = (p.stableVersion as string) ?? '';
   params.grayGroupIds = (p.grayGroupIds as string[]) ?? [];
+  const rv = (p.review ?? {}) as { suspectPolicy?: string; videoFrames?: number };
+  params.reviewSuspectPolicy = rv.suspectPolicy ?? 'reject';
+  params.reviewVideoFrames = rv.videoFrames ?? 3;
   backups.value = (await http.get('/system/backups')) as unknown as typeof backups.value;
   groups.value = (await http.get('/device-groups')) as unknown as typeof groups.value;
 }
 async function save(): Promise<void> {
-  await http.put('/system/params', { ...params });
+  const { reviewSuspectPolicy, reviewVideoFrames, ...rest } = params;
+  await http.put('/system/params', { ...rest, review: { suspectPolicy: reviewSuspectPolicy, videoFrames: reviewVideoFrames } });
   ElMessage.success('参数已保存');
 }
 async function testAlert(): Promise<void> {

@@ -22,30 +22,49 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
   /* ---------------- 管理端：任务创建与撤回 ---------------- */
 
   async createTask(
-    body: { contentId: string; targetType: 'ALL' | 'GROUP' | 'DEVICE'; targetIds?: string[]; mode?: 'now' | 'scheduled'; startAt?: string },
+    body: { contentId?: string; contentIds?: string[]; targetType: 'ALL' | 'GROUP' | 'DEVICE'; targetIds?: string[]; mode?: 'now' | 'scheduled'; startAt?: string },
     actorId?: string,
   ) {
-    const content = await this.prisma.content.findUnique({ where: { id: body.contentId } });
-    if (!content) throw new NotFoundException('内容不存在');
-    if (content.status !== 'APPROVED' && content.status !== 'PUBLISHED') {
-      throw new BadRequestException('仅审核通过的内容可发布（R6 编辑-审核-发布分离）');
+    // PB-04 批量发布：多条内容组成发布单（同 batchId），可整批撤回
+    const ids = body.contentIds?.length ? body.contentIds : body.contentId ? [body.contentId] : [];
+    if (ids.length === 0) throw new BadRequestException('请选择要发布的内容');
+    const contents = await this.prisma.content.findMany({ where: { id: { in: ids } } });
+    if (contents.length !== ids.length) throw new NotFoundException('存在无效的内容');
+    for (const content of contents) {
+      if (content.status !== 'APPROVED' && content.status !== 'PUBLISHED') {
+        throw new BadRequestException(`仅审核通过的内容可发布（R6 编辑-审核-发布分离）：${content.title}`);
+      }
     }
+    const batchId = ids.length > 1 ? createHash('sha1').update(ids.join(',')).digest('hex').slice(0, 10) : undefined;
     const executeAt = body.mode === 'scheduled' && body.startAt ? new Date(body.startAt) : new Date();
-    const task = await this.prisma.publishTask.create({
-      data: {
-        contentId: body.contentId,
-        targetType: body.targetType,
-        targetIds: body.targetIds ?? [],
-        status: executeAt.getTime() > Date.now() ? 'PENDING' : 'DISPATCHED',
-      },
-    });
-    await this.prisma.content.update({ where: { id: body.contentId }, data: { status: 'PUBLISHED' } }).catch(() => undefined);
-    await this.prisma.auditLog.create({
-      data: { userId: actorId, action: 'PUBLISH_CREATE', targetType: 'publishTask', targetId: task.id, detail: { ...body, executeAt: executeAt.toISOString() } as never },
-    });
-    if (executeAt.getTime() <= Date.now()) await this.execute(task.id);
-    else this.scheduleOnce(executeAt.getTime() - Date.now(), task.id);
-    return { id: task.id };
+    const created: Array<{ id: string }> = [];
+    for (const contentId of ids) {
+      const task = await this.prisma.publishTask.create({
+        data: {
+          contentId,
+          targetType: body.targetType,
+          targetIds: body.targetIds ?? [],
+          status: executeAt.getTime() > Date.now() ? 'PENDING' : 'DISPATCHED',
+          batchId,
+        },
+      });
+      created.push({ id: task.id });
+      await this.prisma.content.update({ where: { id: contentId }, data: { status: 'PUBLISHED' } }).catch(() => undefined);
+      await this.prisma.auditLog.create({
+        data: { userId: actorId, action: 'PUBLISH_CREATE', targetType: 'publishTask', targetId: task.id, detail: { ...body, batchId, executeAt: executeAt.toISOString() } as never },
+      });
+      if (executeAt.getTime() <= Date.now()) await this.execute(task.id);
+      else this.scheduleOnce(executeAt.getTime() - Date.now(), task.id);
+    }
+    return batchId ? { batchId, ids: created.map((c) => c.id) } : { id: created[0].id };
+  }
+
+  /** 整批撤回（PB-04）：同批次任务全部下架，终端同步删除本地内容 */
+  async revokeBatch(batchId: string, actorId?: string) {
+    const tasks = await this.prisma.publishTask.findMany({ where: { batchId, status: { not: 'REVOKED' } } });
+    if (tasks.length === 0) throw new NotFoundException('批次不存在或已全部撤回');
+    for (const task of tasks) await this.revokeTask(task.id, actorId);
+    return { ok: true, revoked: tasks.length };
   }
 
   async revokeTask(taskId: string, actorId?: string) {
@@ -177,29 +196,37 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
     });
 
     const now = Date.now();
-    const contents: PlayableItem[] = [];
+    const rows: Array<{ topped: boolean; sort: number; item: PlayableItem }> = [];
     for (const t of visible) {
       const c = t.content;
       if (c.validFrom && c.validFrom.getTime() > now) continue;
       if (c.validTo && c.validTo.getTime() < now) continue;
       const media = c.media;
       const body = (c.body ?? {}) as Record<string, unknown>;
-      contents.push({
-        id: c.id,
-        type: media?.kind === 'video' ? 'video' : media?.kind === 'image' ? 'image' : c.type === 'richtext' ? 'text' : 'text',
-        title: c.title,
-        remoteUrl: media ? `${baseUrl}/api/device-api/download/${media.id}` : undefined,
-        html: typeof body.html === 'string' ? body.html : undefined,
-        durationSec: typeof body.durationSec === 'number' ? body.durationSec : undefined,
-        sha256: media?.sha256 ?? undefined,
-      } as never);
+      rows.push({
+        topped: c.topped,
+        sort: c.sort,
+        item: {
+          id: c.id,
+          type: media?.kind === 'video' ? 'video' : media?.kind === 'image' ? 'image' : c.type === 'richtext' ? 'text' : 'text',
+          title: c.title,
+          remoteUrl: media ? `${baseUrl}/api/device-api/download/${media.id}` : undefined,
+          html: typeof body.html === 'string' ? body.html : undefined,
+          durationSec: typeof body.durationSec === 'number' ? body.durationSec : undefined,
+          sha256: media?.sha256 ?? undefined,
+        } as never,
+      });
     }
+    // CM-05：终端清单按 置顶→排序值 优先排列
+    rows.sort((a, b) => (a.topped === b.topped ? b.sort - a.sort : a.topped ? -1 : 1));
+    const contents = rows.map((r) => r.item);
 
-    const programsRaw = await this.prisma.program.findMany({ where: { enabled: true }, include: { items: { include: { media: true } } } });
+    const programsRaw = await this.prisma.program.findMany({ where: { enabled: true, isTemplate: false }, include: { items: { include: { media: true } } } });
     const programs: Program[] = programsRaw.map((p) => ({
       id: p.id,
       name: p.name,
       layout: (p.layout as Program['layout']) ?? 'full',
+      zones: (p.zones ?? undefined) as never,
       items: p.items
         .sort((a, b) => a.sort - b.sort)
         .map((it) => ({

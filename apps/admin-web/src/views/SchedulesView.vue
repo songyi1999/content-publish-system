@@ -3,6 +3,21 @@
     <template #header>
       <div class="bar"><span>排期管理（R12 分时段/周期/优先级）</span><el-button type="primary" @click="open()">新建排期</el-button></div>
     </template>
+    <el-divider content-position="left">排期月视图（PD-04：点选日期新建该星期的排期，节目块按星期分布）</el-divider>
+    <el-calendar v-model="calDate">
+      <template #date-cell="{ data }">
+        <div class="cal-cell" @click="openOnDate(data.date)">
+          <span>{{ data.date.getDate() }}</span>
+          <div class="cal-dots">
+            <el-tag v-for="s in schedulesOn(data.date)" :key="s.id + String(data.date)" size="small" :type="s.priority >= 100 ? 'danger' : 'info'" class="cal-dot">
+              {{ s.program?.name ?? s.name }}
+            </el-tag>
+          </div>
+        </div>
+      </template>
+    </el-calendar>
+
+    <el-divider content-position="left">排期明细</el-divider>
     <el-table :data="items" border>
       <el-table-column prop="name" label="排期名" width="160" />
       <el-table-column label="节目" width="150">
@@ -69,6 +84,19 @@ const DAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周�
 interface Row { id: string; name: string; programId: string; program?: { name: string } | null; priority: number; daysOfWeek: number[]; startMinute: number; endMinute: number }
 const items = ref<Row[]>([]);
 const programs = ref<Array<{ id: string; name: string }>>([]);
+const calDate = ref(new Date());
+
+/** 月视图：按星期几命中显示节目块（排期为周期模型） */
+function schedulesOn(d: Date): Row[] {
+  const wd = d.getDay();
+  return items.value.filter((s) => !s.daysOfWeek?.length || s.daysOfWeek.includes(wd));
+}
+/** 点选日期：以该日期的星期预填新建排期（PD-04） */
+function openOnDate(d: Date): void {
+  open();
+  dlg.form.daysOfWeek = [d.getDay()];
+  dlg.form.name = `${d.getMonth() + 1}/${d.getDate()} 排期`;
+}
 const dlg = reactive({
   visible: false, id: '',
   form: { name: '', programId: '', priority: 1, daysOfWeek: [] as number[], start: new Date(2000, 0, 1, 0, 0), end: new Date(2000, 0, 1, 23, 59) },
@@ -116,4 +144,7 @@ onMounted(async () => {
 <style scoped>
 .bar { display: flex; justify-content: space-between; align-items: center; }
 .tip { font-size: 12px; color: #909399; margin-left: 8px; }
+.cal-cell { min-height: 56px; cursor: pointer; }
+.cal-dots { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+.cal-dot { transform: scale(0.82); transform-origin: left; }
 </style>

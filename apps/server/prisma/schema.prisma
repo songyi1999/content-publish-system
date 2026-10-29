@@ -33,6 +33,7 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   auditLogs    AuditLog[]
+  createdContents Content[] @relation("createdContents")
 }
 
 //栏目与内容（R1/R4/R9）
@@ -83,6 +84,13 @@ model Content {
   validFrom DateTime?
   validTo   DateTime?
   sort      Int           @default(0)
+  /// 标签（CM-05）：多值，可按标签检索
+  tags      String[]      @default([])
+  /// 置顶（CM-05）：终端清单按 置顶→sort 排序
+  topped    Boolean       @default(false)
+  /// 创建人（UM-03 数据权限：编辑角色仅见本人内容）
+  createdById String?
+  creator    User?         @relation("createdContents", fields: [createdById], references: [id])
   createdAt DateTime      @default(now())
   updatedAt DateTime      @updatedAt
   tasks     PublishTask[]
@@ -131,8 +139,12 @@ model PublishTask {
   status     String   @default("PENDING")
   /// 每终端下发状态：{deviceCode: SENT|QUEUED|FAILED}
   body       Json?
+  /// 发布单批次号（PB-04）：一次批量发布的多条任务共享，可整批撤回
+  batchId    String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  @@index([batchId])
 }
 
 model Schedule {
@@ -157,6 +169,10 @@ model Program {
   name      String
   /// full | left-right | three-col | video-ticker
   layout    String          @default("full")
+  /// 区域配置（R11/PD-02）：{side:{enabled,showClock,showWeather,ratio}, ticker:{enabled}, web:{enabled,url,ratio}, mainRatio}
+  zones     Json?
+  /// 模板标记（PD-03）：模板不出现在终端清单，仅作编排起点
+  isTemplate Boolean        @default(false)
   enabled   Boolean         @default(true)
   createdAt DateTime        @default(now())
   items     ProgramItem[]

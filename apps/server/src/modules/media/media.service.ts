@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -50,6 +50,7 @@ export class MediaService {
       },
     });
     await this.makeThumb(asset.id, storagePath, kind);
+    if (kind === 'video') await this.autoTranscode(asset.id, storagePath);
     return this.prisma.mediaAsset.findUnique({ where: { id: asset.id } });
   }
 
@@ -66,6 +67,48 @@ export class MediaService {
       await this.prisma.mediaAsset.update({ where: { id: assetId }, data: { body: { thumbPath: thumbRel } as never } }).catch(() => undefined);
     } catch {
       // ffmpeg 缺失或格式不支持时不阻断上传，缩略图留空
+    }
+  }
+
+  /** 上传统一转码（ED-07）：非 H.264 视频自动转 H.264/AAC + faststart；已是 h264 原样保留 */
+  private async autoTranscode(assetId: string, storagePath: string): Promise<void> {
+    const abs = resolve(this.storage.rootDir, storagePath);
+    try {
+      const probe = await run(
+        ffprobePath(),
+        ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', abs],
+        { timeout: 30_000 },
+      );
+      if (String(probe.stdout).trim() === 'h264') return;
+    } catch {
+      return; // 探测失败保留原件，可用手动转码兜底
+    }
+    const outRel = storagePath.replace(/\.([^.]+)$/, '_t.mp4');
+    const outAbs = resolve(this.storage.rootDir, outRel);
+    try {
+      await run(
+        ffmpegPath(),
+        ['-i', abs, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', '-y', outAbs],
+        { timeout: 30 * 60_000 },
+      );
+    } catch {
+      return; // 转码失败保留原件不阻断上传
+    }
+    // 转码产物替换原件：重算 sha256 与大小，保证终端下载校验一致
+    const [{ size }, buf] = await Promise.all([stat(outAbs), readFile(outAbs)]);
+    try {
+      await this.prisma.mediaAsset.update({
+        where: { id: assetId },
+        data: {
+          storagePath: outRel,
+          sizeBytes: size,
+          sha256: createHash('sha256').update(buf).digest('hex'),
+          mimeType: 'video/mp4',
+          body: { transcoded: true } as never,
+        },
+      });
+    } catch {
+      // 转码产物 sha 与库内既有记录冲突（如同内容重复上传）：保留原件，人工转码兜底
     }
   }
 
@@ -87,10 +130,16 @@ export class MediaService {
     } catch {
       throw new ServiceUnavailableException('转码失败：请确认服务端已安装 ffmpeg（容器镜像已内置）');
     }
-    const { size } = await stat(outAbs);
+    const [{ size }, buf] = await Promise.all([stat(outAbs), readFile(outAbs)]);
     const updated = await this.prisma.mediaAsset.update({
       where: { id: mediaId },
-      data: { storagePath: outRel, body: { transcoded: true } as never },
+      data: {
+        storagePath: outRel,
+        sizeBytes: size,
+        sha256: createHash('sha256').update(buf).digest('hex'),
+        mimeType: 'video/mp4',
+        body: { transcoded: true } as never,
+      },
     });
     return { ...updated, sizeBytes: size };
   }
@@ -124,4 +173,7 @@ export class MediaService {
 /** 优先使用系统 ffmpeg（PATH），否则报错提示 */
 function ffmpegPath(): string {
   return process.env.FFMPEG_PATH || 'ffmpeg';
+}
+function ffprobePath(): string {
+  return process.env.FFPROBE_PATH || 'ffprobe';
 }

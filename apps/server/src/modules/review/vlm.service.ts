@@ -56,11 +56,13 @@ export class VlmService {
   }
 
   /** 视频审核（AV-06）：抽 3 帧逐帧走图片审核，任一命中即命中 */
-  async reviewVideo(absPath: string): Promise<AiVerdict> {
+  async reviewVideo(absPath: string, frameCount = 3): Promise<AiVerdict> {
     const dir = await mkdtemp(join(tmpdir(), 'cps-vframes-'));
     try {
       const ffmpeg = process.env.FFMPEG_PATH || 'ffmpeg';
-      const positions = ['10%', '50%', '90%'];
+      // 抽帧数可配置（AV-07）：1~6 帧，均匀取样，默认 3
+      const n = Math.min(6, Math.max(1, Math.round(frameCount) || 3));
+      const positions = Array.from({ length: n }, (_, i) => `${Math.round((100 * (i + 0.5)) / n)}%`);
       for (let i = 0; i < positions.length; i++) {
         await new Promise<void>((done) => {
           const p = spawn(ffmpeg, ['-ss', positions[i], '-i', absPath, '-frames:v', '1', '-vf', 'scale=640:-1', '-y', join(dir, `f${i}.jpg`)]);
