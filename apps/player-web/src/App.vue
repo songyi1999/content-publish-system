@@ -46,6 +46,16 @@
       </div>
     </div>
 
+    <!-- 定时关机遮罩（DV-10 A）：到点全黑并暂停媒体 -->
+    <div v-if="phase === 'playing' && powerOff" class="power-mask"></div>
+
+    <!-- 应用内更新提示（TC-09/10） -->
+    <div v-if="phase === 'playing' && updateInfo" class="update-bar">
+      <span>发现新版本 v{{ updateInfo.latest }}</span>
+      <button @click.stop="installUpdate">立即安装</button>
+      <button class="ghost" @click.stop="updateInfo = null">稍后</button>
+    </div>
+
     <!-- 触摸导航（TC-03 基础交互）：点按呼出，选节目即切；60 秒无操作自动隐藏并回默认轮播 -->
     <div v-if="phase === 'playing' && navVisible" class="nav-bar">
       <div class="nav-item" :class="{ active: !manualProgramId }" @click.stop="pickManual('')">默认轮播</div>
@@ -57,10 +67,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { Manifest, TerminalConfig } from './api';
-import { activate, connectHeartbeat, fetchManifest, loadConfig, platformDefaultBaseUrl, report, uploadScreenshot } from './api';
-import { syncItems, getMedia } from './cache';
+import { APP_VERSION, activate, connectHeartbeat, fetchManifest, fetchVersion, loadConfig, platformDefaultBaseUrl, report, uploadScreenshot } from './api';
+import { clearAll, inDownloadWindow, syncItems, getMedia } from './cache';
 import { locateInPlaylist, pickActiveSlot } from '@cps/player-core';
 import { fetchWeather, weatherEmoji, type WeatherNow } from './weather';
 import type { PlayableItem, Program, ProgramZones } from '@cps/shared';
@@ -87,6 +97,54 @@ const lastInteraction = ref(Date.now());
 const weather = ref<WeatherNow | null>(null);
 const videoEl = ref<HTMLVideoElement | null>(null);
 const imgEl = ref<HTMLImageElement | null>(null);
+
+// 定时开关机（DV-10 A 方案）：到点全黑遮罩+暂停媒体，模拟关机；跨午夜区间支持
+const powerOff = ref(false);
+const updateInfo = ref<{ latest: string; url: string } | null>(null);
+let powerPlan: { daysOfWeek?: number[]; onMinute?: number; offMinute?: number } | null = null;
+
+function applyPowerPlan(p: { daysOfWeek?: number[]; onMinute?: number; offMinute?: number } | null): void {
+  powerPlan = p && typeof p.offMinute === 'number' ? p : null;
+  localStorage.setItem('cps.powerPlan', JSON.stringify(powerPlan));
+  evalPowerPlan();
+}
+
+function evalPowerPlan(): void {
+  if (!powerPlan) { powerOff.value = false; return; }
+  const now = new Date();
+  const days = powerPlan.daysOfWeek ?? [];
+  if (days.length && !days.includes(now.getDay())) { powerOff.value = false; return; }
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const on = powerPlan.onMinute ?? 0;
+  const off = powerPlan.offMinute ?? 0;
+  powerOff.value = off > on ? cur >= off || cur < on : cur >= off && cur < on;
+}
+
+watch(powerOff, (off) => {
+  const v = videoEl.value;
+  if (!v) return;
+  if (off) v.pause();
+  else void v.play().catch(() => undefined);
+});
+
+/** 应用内更新（TC-09/TC-10 Android）：提示安装，交给系统下载/安装器 */
+async function checkUpdate(): Promise<void> {
+  try {
+    const v = await fetchVersion();
+    if (!v.upToDate && (v.apkUrl || v.exeUrl)) updateInfo.value = { latest: v.latest, url: v.apkUrl || v.exeUrl };
+  } catch { /* 离线容忍 */ }
+}
+
+function installUpdate(): void {
+  if (updateInfo.value) window.open(updateInfo.value.url, '_blank');
+}
+
+/** 远程擦除（DV-04）：清空本地媒体与配置，回到激活页 */
+async function wipeLocal(): Promise<void> {
+  await clearAll().catch(() => undefined);
+  localStorage.clear();
+  location.reload();
+}
 
 let hb: ReturnType<typeof connectHeartbeat> | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -170,7 +228,7 @@ async function syncLoop(): Promise<void> {
     online.value = true;
     if (changed) {
       syncMsg.value = '下载媒体文件…';
-      await syncItems(m.contents.concat(...m.programs.map((p) => p.items)), (msg) => (syncMsg.value = msg));
+      await syncItems(m.contents.concat(...m.programs.map((p) => p.items)), (msg) => (syncMsg.value = msg), { downloadWindow: m.sync?.downloadWindow });
       for (const [id, old] of blobUrls.value) URL.revokeObjectURL(old);
       const map = new Map<string, string>();
       for (const item of m.contents.concat(...m.programs.map((p) => p.items))) {
@@ -217,6 +275,7 @@ function startPlaying(): void {
   applySchedule();
   timer = setInterval(() => {
     clockTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+    evalPowerPlan();
     // 无人交互 60 秒：退出手动节目与导航栏（TC-03），回默认排期
     if (Date.now() - lastInteraction.value > 60_000 && (manualProgramId.value || navVisible.value)) {
       manualProgramId.value = null;
@@ -252,6 +311,9 @@ async function captureAndUpload(): Promise<void> {
 
 onMounted(() => {
   clockTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+  try { powerPlan = JSON.parse(localStorage.getItem('cps.powerPlan') ?? 'null'); } catch { powerPlan = null; }
+  setTimeout(() => void checkUpdate(), 15_000);
+  setInterval(() => void checkUpdate(), 6 * 3600_000);
   const refreshWeather = () => void fetchWeather().then((w) => (weather.value = w));
   refreshWeather();
   setInterval(refreshWeather, 30 * 60_000);
@@ -266,6 +328,9 @@ onMounted(() => {
         void report('CMD_RECEIVED', { type: cmd.type });
         if (cmd.type === 'publish' || cmd.type === 'unpublish') void syncLoop().then(applySchedule);
         else if (cmd.type === 'screenshot') void captureAndUpload();
+        else if (cmd.type === 'set_power_plan') applyPowerPlan(cmd.payload as { daysOfWeek?: number[]; onMinute?: number; offMinute?: number } | null);
+        else if (cmd.type === 'clear_cache') void wipeLocal();
+        else if (cmd.type === 'update_app') void checkUpdate();
       },
     });
   }
@@ -310,6 +375,10 @@ onUnmounted(() => {
 .nav-item.active { border-color: #d4875a; color: #d4875a; }
 .zone-web { flex: 1; overflow: hidden; background: #fff; }
 .web-frame { width: 100%; height: 100%; border: none; }
+.power-mask { position: absolute; inset: 0; background: #000; z-index: 99; }
+.update-bar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); background: rgba(20, 24, 32, 0.92); color: #fff; padding: 8px 14px; border-radius: 8px; display: flex; gap: 10px; align-items: center; z-index: 20; font-size: 14px; }
+.update-bar button { background: #d4875a; border: none; color: #fff; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.update-bar button.ghost { background: #555; }
 
 /* 竖屏适配（ED-02）：左图右文版式在竖屏下改为上下布局，字号改用最小边基准 */
 @media (orientation: portrait) {

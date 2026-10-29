@@ -26,6 +26,13 @@ export class PublishController {
     });
   }
 
+  /** 手动重发（PB-07） */
+  @Post(':id/retry')
+  @Roles('admin', 'auditor', 'publisher')
+  retry(@Param('id') id: string, @CurrentUser() me: JwtUser) {
+    return this.publish.retryTask(id, me.sub);
+  }
+
   /** 整批撤回（PB-04）：发布单内全部任务下架 */
   @Post('batch/:batchId/revoke')
   @Roles('admin', 'auditor', 'publisher')

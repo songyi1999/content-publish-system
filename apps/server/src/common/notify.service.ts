@@ -1,11 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 export interface NotifyPayload {
-  /** 告警去重键（同键 10 分钟内只发一次） */
+  /** 告警去重键（同键默认 10 分钟内只发一次） */
   key: string;
   content: string;
   /** 可选：图片 base64（先文本后图片） */
   imageBase64?: string;
+  /** 可选：自定义节流窗口毫秒数（如存储水位 30 分钟） */
+  throttleMs?: number;
 }
 
 /** 告警通知（DV-07/SY-03）：webhook 渠道，同键 10 分钟节流，发送失败不影响主流程 */
@@ -22,8 +24,9 @@ export class NotifyService {
   async send(payload: NotifyPayload): Promise<void> {
     const url = process.env.ALERT_WEBHOOK_URL;
     if (!url) return;
+    const throttleMs = payload.throttleMs ?? NotifyService.THROTTLE_MS;
     const last = this.sentAt.get(payload.key) ?? 0;
-    if (Date.now() - last < NotifyService.THROTTLE_MS) return;
+    if (Date.now() - last < throttleMs) return;
     this.sentAt.set(payload.key, Date.now());
     try {
       const body: Record<string, string> = { content: payload.content };

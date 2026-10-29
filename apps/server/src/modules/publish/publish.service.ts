@@ -59,6 +59,16 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
     return batchId ? { batchId, ids: created.map((c) => c.id) } : { id: created[0].id };
   }
 
+  /** 手动重发（PB-07）：对未撤回任务重新执行下发 */
+  async retryTask(taskId: string, actorId?: string) {
+    const task = await this.prisma.publishTask.findUnique({ where: { id: taskId } });
+    if (!task) throw new NotFoundException('任务不存在');
+    if (task.status === 'REVOKED') throw new BadRequestException('已撤回任务不可重发，请重新发布');
+    await this.execute(taskId);
+    await this.prisma.auditLog.create({ data: { userId: actorId, action: 'PUBLISH_RETRY', targetType: 'publishTask', targetId: taskId } });
+    return { ok: true };
+  }
+
   /** 整批撤回（PB-04）：同批次任务全部下架，终端同步删除本地内容 */
   async revokeBatch(batchId: string, actorId?: string) {
     const tasks = await this.prisma.publishTask.findMany({ where: { batchId, status: { not: 'REVOKED' } } });
@@ -176,6 +186,7 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
     contents: PlayableItem[];
     programs: Program[];
     schedules: ScheduleSlot[];
+    sync: { downloadWindow?: string };
     version: string;
   }> {
     const device = await this.prisma.device.findUnique({ where: { id: deviceId } });
@@ -239,6 +250,10 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
         })),
     }));
 
+    // 错峰下载窗口（PB-10）随清单下发
+    const winRow = await this.prisma.appParam.findUnique({ where: { key: 'downloadWindow' } }).catch(() => undefined);
+    const downloadWindow = (winRow?.value as { window?: string })?.window;
+
     const schedulesRaw = await this.prisma.schedule.findMany({ where: { enabled: true } });
     const schedules: ScheduleSlot[] = schedulesRaw
       .filter((s) => s.targetGroupIds.length === 0 || (device.groupId ? s.targetGroupIds.includes(device.groupId) : false))
@@ -251,7 +266,7 @@ export class PublishService implements OnModuleInit, OnModuleDestroy {
         endMinute: s.endMinute,
       }));
 
-    return { contents, programs, schedules, version: createHash('sha1').update(JSON.stringify({ contents, programs, schedules })).digest('hex').slice(0, 12) };
+    return { contents, programs, schedules, sync: { downloadWindow }, version: createHash('sha1').update(JSON.stringify({ contents, programs, schedules })).digest('hex').slice(0, 12) };
   }
 
   mediaAbsPath(storagePath: string): string {

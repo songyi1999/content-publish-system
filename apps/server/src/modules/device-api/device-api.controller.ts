@@ -138,6 +138,19 @@ export class DeviceApiController {
     if (body.event === 'DOWNLOAD_DONE') {
       await this.prisma.device.update({ where: { id: device.id }, data: { lastSeenAt: new Date() } });
     }
+    // 逐台下载进度（PB-06）：终端同步进度写入对应内容的最近发布任务
+    if (body.event === 'SYNC_PROGRESS' && body.detail && typeof body.detail.percent === 'number') {
+      const task = await this.prisma.publishTask.findFirst({
+        where: { contentId: String(body.detail.contentId ?? ''), status: 'DONE' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (task) {
+        const t = (task.body ?? {}) as Record<string, unknown>;
+        const prog = (t.perDeviceProgress ?? {}) as Record<string, number>;
+        prog[device.code] = Math.max(0, Math.min(100, Math.round(body.detail.percent)));
+        await this.prisma.publishTask.update({ where: { id: task.id }, data: { body: { ...t, perDeviceProgress: prog } as never } });
+      }
+    }
     return { ok: true };
   }
 

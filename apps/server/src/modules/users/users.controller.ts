@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseBoolPipe, Put, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, ParseBoolPipe, Put, Post, Query } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../../common/audit.service';
 import { hashPassword } from '../../common/password';
@@ -22,12 +22,23 @@ export class UsersController {
     return users.map((u) => ({ ...u, roleId: u.role?.id ?? null, role: u.role?.name ?? null }));
   }
 
+  /** 密码强度校验（UM-01）：策略可配置，默认 ≥8 位且含字母与数字 */
+  private async assertPasswordStrength(password: string): Promise<void> {
+    const row = await this.prisma.appParam.findUnique({ where: { key: 'passwordPolicy' } }).catch(() => undefined);
+    const policy = (row?.value ?? {}) as { minLength?: number; requireLetter?: boolean; requireDigit?: boolean };
+    const min = policy.minLength ?? 8;
+    if (password.length < min) throw new BadRequestException(`密码强度不足：至少 ${min} 位`);
+    if (policy.requireLetter !== false && !/[A-Za-z]/.test(password)) throw new BadRequestException('密码强度不足：需包含字母');
+    if (policy.requireDigit !== false && !/\d/.test(password)) throw new BadRequestException('密码强度不足：需包含数字');
+  }
+
   @Post()
   @Roles('admin')
   async create(
     @Body() body: { username: string; password: string; displayName?: string; roleId?: string },
     @CurrentUser() me: JwtUser,
   ) {
+    await this.assertPasswordStrength(body.password);
     const user = await this.prisma.user.create({
       data: {
         username: body.username,

@@ -119,6 +119,10 @@ model Device {
   appVersion   String?
   ip           String?
   lastSeenAt   DateTime?
+  /// 台账（DV-02/DV-07）：型号、内存、剩余存储（心跳上报）
+  model        String?
+  memTotalMB   Int?
+  storageFreeBytes BigInt?
   /// 定时开关机策略（R13）：{daysOfWeek:[1-6], onMinute:480, offMinute:1260}
   powerPlan    Json?
   screenshots  ScreenshotLog[]

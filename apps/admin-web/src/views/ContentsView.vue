@@ -11,6 +11,9 @@
             <el-button>导入 docx</el-button>
           </el-upload>
           <el-button @click="htmlDlg = true">导入 HTML</el-button>
+          <el-upload :show-file-list="false" :auto-upload="false" multiple accept=".txt,.docx,.html,.htm" :on-change="onBatchPick">
+            <el-button type="warning" plain>批量导入</el-button>
+          </el-upload>
           <el-button type="primary" @click="open()">新建内容</el-button>
         </div>
       </div>
@@ -55,6 +58,7 @@
       <el-table-column label="操作" width="330">
         <template #default="{ row }">
           <el-button size="small" @click="open(row)">编辑</el-button>
+          <el-button size="small" @click="preview(row)">预览</el-button>
           <el-button size="small" @click="showVersions(row)">历史</el-button>
           <el-button v-if="row.status === 'DRAFT' || row.status === 'REJECTED'" size="small" type="warning" @click="submit(row)">提交审核</el-button>
           <el-button v-if="row.status === 'PUBLISHED'" size="small" type="danger" @click="goPublish(row)">再次发布</el-button>
@@ -85,6 +89,10 @@
             <Editor v-model="dlg.form.html" :defaultConfig="{ placeholder: '图文编辑（R4）' }" mode="simple" @onCreated="editorCreated" />
           </div>
         </el-form-item>
+        <el-form-item label="时长(秒)">
+          <el-input-number v-model="dlg.form.durationSec" :min="3" :max="600" />
+          <span class="tip2">轮播单条停留时长，默认 10 秒</span>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dlg.visible = false">取消</el-button>
@@ -103,6 +111,26 @@
             <el-button size="small" type="warning" @click="restoreVer(row)">恢复</el-button>
           </template>
         </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <!-- 发布前预览（CM-07）：横竖屏模板效果 -->
+    <el-dialog v-model="prevDlg" :title="`预览：${prevTitle}（横屏 / 竖屏）`" width="860" top="4vh">
+      <div class="preview-row">
+        <div class="screen landscape"><iframe :srcdoc="prevHtml" class="pv" /></div>
+        <div class="screen portrait"><iframe :srcdoc="prevHtml" class="pv" /></div>
+      </div>
+      <p class="tip">左：1920x1080 横屏 · 右：1080x1920 竖屏</p>
+    </el-dialog>
+
+    <!-- 批量导入结果报告（ED-08） -->
+    <el-dialog v-model="batchDlg" title="批量导入结果报告" width="520">
+      <el-table :data="batchResult" border size="small">
+        <el-table-column prop="name" label="文件" min-width="180" />
+        <el-table-column label="结果" width="90">
+          <template #default="{ row }"><el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? '成功' : '失败' }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="msg" label="说明" min-width="160" />
       </el-table>
     </el-dialog>
 
@@ -141,7 +169,7 @@ const htmlDlg = ref(false);
 const htmlInput = reactive({ title: '', html: '' });
 const dlg = reactive({
   visible: false, id: '',
-  form: { title: '', columnPath: [] as string[], range: null as [Date, Date] | null, html: '', tags: [] as string[], topped: false },
+  form: { title: '', columnPath: [] as string[], range: null as [Date, Date] | null, html: '', tags: [] as string[], topped: false, durationSec: 10 },
 });
 
 onBeforeUnmount(() => { editorRef.value?.destroy(); });
@@ -156,16 +184,17 @@ async function load(): Promise<void> {
 
 function open(row?: ContentRow): void {
   dlg.id = row?.id ?? '';
-  dlg.form = { title: row?.title ?? '', columnPath: [], range: null, html: '', tags: row?.tags ? [...row.tags] : [], topped: row?.topped ?? false };
+  dlg.form = { title: row?.title ?? '', columnPath: [], range: null, html: '', tags: row?.tags ? [...row.tags] : [], topped: row?.topped ?? false, durationSec: 10 };
   dlg.visible = true;
   if (row) {
     http.get(`/contents/${row.id}`).then((c) => {
-      const detail = c as unknown as { body?: { html?: string }, columnId?: string, validFrom?: string, validTo?: string, tags?: string[], topped?: boolean };
+      const detail = c as unknown as { body?: { html?: string, durationSec?: number }, columnId?: string, validFrom?: string, validTo?: string, tags?: string[], topped?: boolean };
       dlg.form.html = detail.body?.html ?? '';
       if (detail.columnId) dlg.form.columnPath = [detail.columnId];
       if (detail.validFrom && detail.validTo) dlg.form.range = [new Date(detail.validFrom), new Date(detail.validTo)];
       dlg.form.tags = detail.tags ?? [];
       dlg.form.topped = detail.topped ?? false;
+      dlg.form.durationSec = typeof detail.body?.durationSec === 'number' ? detail.body.durationSec : 10;
     });
   }
 }
@@ -174,11 +203,11 @@ async function save(): Promise<void> {
   const columnId = dlg.form.columnPath.length ? dlg.form.columnPath[dlg.form.columnPath.length - 1] : undefined;
   const payload = {
     title: dlg.form.title, columnId, type: 'richtext',
-    body: { html: dlg.form.html },
     validFrom: dlg.form.range?.[0]?.toISOString(),
     validTo: dlg.form.range?.[1]?.toISOString(),
     tags: dlg.form.tags,
     topped: dlg.form.topped,
+    body: { html: dlg.form.html, durationSec: dlg.form.durationSec },
   };
   if (dlg.id) await http.put(`/contents/${dlg.id}`, payload);
   else await http.post('/contents', payload);
@@ -228,6 +257,59 @@ function fmtDate(d: string | null): string {
 }
 
 const verDlg = reactive({ visible: false, contentId: '', items: [] as Array<{ id: string; title: string; createdAt: string }> });
+
+// 发布前预览（CM-07）
+const prevDlg = ref(false);
+const prevHtml = ref('');
+const prevTitle = ref('');
+function preview(row: ContentRow): void {
+  http.get(`/contents/${row.id}`).then((c) => {
+    const detail = c as unknown as { body?: { html?: string } };
+    prevHtml.value = `<html><body style="margin:0;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px">${detail.body?.html ?? '<p>（无正文）</p>'}</body></html>`;
+    prevTitle.value = row.title;
+    prevDlg.value = true;
+  });
+}
+
+// 批量导入（ED-08）：txt/docx/html 混合多文件 + 结果报告
+let pendingBatch: File[] = [];
+let batchTimer: ReturnType<typeof setTimeout> | undefined;
+function onBatchPick(_row: unknown, files: Array<{ raw?: File }>): void {
+  pendingBatch = files.map((f) => f.raw).filter((f): f is File => !!f);
+  if (batchTimer) clearTimeout(batchTimer);
+  batchTimer = setTimeout(() => {
+    const fs = pendingBatch;
+    pendingBatch = [];
+    if (fs.length) void batchImport(fs.map((f) => ({ file: f })));
+  }, 600);
+}
+const batchDlg = ref(false);
+const batchResult = ref<Array<{ name: string; ok: boolean; msg: string }>>([]);
+async function batchImport(o: { file: File }[]): Promise<void> {
+  batchResult.value = [];
+  for (const f of o) {
+    const name = f.file.name.toLowerCase();
+    try {
+      if (name.endsWith('.html') || name.endsWith('.htm')) {
+        const text = await f.file.text();
+        await http.post('/contents/import/html', { title: f.file.name.replace(/\.[^.]+$/, ''), html: text });
+        batchResult.value.push({ name: f.file.name, ok: true, msg: 'HTML 导入' });
+      } else if (name.endsWith('.txt') || name.endsWith('.docx')) {
+        const fd = new FormData();
+        fd.append('file', f.file);
+        await http.post(`/contents/import/${name.endsWith('.txt') ? 'txt' : 'docx'}`, fd);
+        batchResult.value.push({ name: f.file.name, ok: true, msg: name.endsWith('.txt') ? '文本导入' : 'docx 导入' });
+      } else {
+        batchResult.value.push({ name: f.file.name, ok: false, msg: '不支持的格式' });
+      }
+    } catch (e) {
+      batchResult.value.push({ name: f.file.name, ok: false, msg: (e as Error).message });
+    }
+  }
+  batchDlg.value = true;
+  ElMessage.success(`批量导入完成：成功 ${batchResult.value.filter((r) => r.ok).length}/${batchResult.value.length}`);
+  load();
+}
 async function showVersions(row: ContentRow): Promise<void> {
   verDlg.contentId = row.id;
   verDlg.items = (await http.get(`/contents/${row.id}/versions`)) as unknown as typeof verDlg.items;
@@ -249,5 +331,11 @@ onMounted(async () => {
 .bar { display: flex; justify-content: space-between; }
 .bar > div:last-child { display: flex; gap: 8px; }
 .editor { border: 1px solid #dcdfe6; z-index: 100; }
+.preview-row { display: flex; gap: 16px; justify-content: center; }
+.screen { background: #000; border: 1px solid #555; overflow: hidden; }
+.screen.landscape { width: 480px; height: 270px; }
+.screen.portrait { width: 152px; height: 270px; }
+.pv { width: 100%; height: 100%; border: none; }
+.tip2 { font-size: 12px; color: #909399; margin-left: 8px; }
 .editor :deep(.w-e-text-container) { height: 260px; }
 </style>

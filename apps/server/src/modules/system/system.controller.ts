@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Post, Put, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, OnModuleDestroy, OnModuleInit, Post, Put, ServiceUnavailableException } from '@nestjs/common';
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, stat } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -24,15 +24,55 @@ const PARAM_KEYS = [
   'downloadWindow',
   'passwordPolicy',
   'review',
+  'scheduleOverlap',
+  'storageAlertFreeMB',
+  'backupAutoEnabled',
 ] as const;
 
 @Controller('system')
-export class SystemController {
+export class SystemController implements OnModuleInit, OnModuleDestroy {
+  private backupTimer?: NodeJS.Timeout;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notify: NotifyService,
   ) {}
+
+  /** 自动备份（SY-02）：开启后每小时做一次快照归档（auto-*.sql），保留 7 天 */
+  onModuleInit(): void {
+    this.backupTimer = setInterval(() => void this.autoBackupTick(), 3600_000);
+  }
+
+  onModuleDestroy(): void {
+    if (this.backupTimer) clearInterval(this.backupTimer);
+  }
+
+  private async autoBackupTick(): Promise<void> {
+    try {
+      const row = await this.prisma.appParam.findUnique({ where: { key: 'backupAutoEnabled' } }).catch(() => undefined);
+      if (!(row?.value as { enabled?: boolean })?.enabled) return;
+      const dir = resolve(process.env.BACKUP_DIR || './data/backups');
+      await mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+      const file = `auto-${stamp}.sql`;
+      await run('pg_dump', [process.env.DATABASE_URL || '', '-f', resolve(dir, file)], { timeout: 10 * 60_000, shell: false } as never).catch(async () => {
+        // 容器内 DATABASE_URL 传参形式不兼容时退回 env 方式
+        await run('sh', ['-c', `pg_dump "$DATABASE_URL" -f "${resolve(dir, file)}"`], { timeout: 10 * 60_000 });
+      });
+      // 清理 7 天前的自动备份
+      const files = await readdir(dir).catch(() => [] as string[]);
+      const cutoff = Date.now() - 7 * 24 * 3600_000;
+      for (const f of files) {
+        if (!f.startsWith('auto-')) continue;
+        const st = await stat(resolve(dir, f)).catch(() => undefined);
+        if (st && st.mtime.getTime() < cutoff) await rm(resolve(dir, f)).catch(() => undefined);
+      }
+      void this.notify.send({ key: `autobackup:${file}`, content: `【内容发布系统】自动备份完成：${file}` });
+    } catch {
+      /* 自动备份失败不影响主流程 */
+    }
+  }
 
   @Get('params')
   async params(): Promise<Record<string, unknown>> {

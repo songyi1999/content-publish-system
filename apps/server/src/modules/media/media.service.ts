@@ -64,7 +64,13 @@ export class MediaService {
       const args = kind === 'video' ? ['-ss', '1', '-i', abs, '-frames:v', '1'] : ['-i', abs];
       args.push('-vf', 'scale=320:-1', '-y', thumbAbs);
       await run(ffmpegPath(), args, { timeout: 120_000 });
-      await this.prisma.mediaAsset.update({ where: { id: assetId }, data: { body: { thumbPath: thumbRel } as never } }).catch(() => undefined);
+      // 多尺寸（ED-03）：再出一张 1280px 宽的大图预览档
+      const lgRel = storagePath.replace(/\.[^.]+$/, '_lg.jpg');
+      const lgAbs = resolve(this.storage.rootDir, lgRel);
+      const argsLg = kind === 'video' ? ['-ss', '1', '-i', abs, '-frames:v', '1'] : ['-i', abs];
+      argsLg.push('-vf', 'scale=1280:-1', '-y', lgAbs);
+      await run(ffmpegPath(), argsLg, { timeout: 120_000 }).catch(() => undefined);
+      await this.prisma.mediaAsset.update({ where: { id: assetId }, data: { body: { thumbPath: thumbRel, thumbPathLg: lgRel } as never } }).catch(() => undefined);
     } catch {
       // ffmpeg 缺失或格式不支持时不阻断上传，缩略图留空
     }

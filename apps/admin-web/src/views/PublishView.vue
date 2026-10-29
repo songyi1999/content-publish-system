@@ -28,10 +28,19 @@
       <el-table-column prop="createdAt" label="创建时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false }) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="180">
+      <el-table-column label="下载进度（PB-06）" width="130">
+        <template #default="{ row }">
+          <el-tooltip v-if="progressText(row)" :content="progressText(row)" placement="top">
+            <el-tag size="small" type="info">进度详情</el-tag>
+          </el-tooltip>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="操作" width="240">
         <template #default="{ row }">
           <el-button v-if="row.status === 'DONE'" size="small" type="danger" @click="revoke(row)">撤回</el-button>
           <el-button v-if="row.batchId && row.status === 'DONE'" size="small" type="danger" plain @click="revokeBatch(row.batchId)">整批撤回</el-button>
+          <el-button v-if="row.status !== 'REVOKED'" size="small" type="warning" plain @click="retry(row)">重发</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -84,7 +93,14 @@ import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { http } from '../api/http';
 
-interface Task { id: string; contentId: string; content?: { title: string } | null; targetType: string; status: string; createdAt: string; batchId?: string | null }
+interface Task { id: string; contentId: string; content?: { title: string } | null; targetType: string; status: string; createdAt: string; batchId?: string | null; body?: { perDevice?: Record<string, string>; perDeviceProgress?: Record<string, number> } | null }
+function progressText(row: Task): string {
+  const prog = row.body?.perDeviceProgress ?? {};
+  const st = row.body?.perDevice ?? {};
+  const codes = [...new Set([...Object.keys(st), ...Object.keys(prog)])];
+  if (codes.length === 0) return '';
+  return codes.map((c) => `${c}：${st[c] ?? '-'}${prog[c] != null ? ` · ${prog[c]}%` : ''}`).join('\n');
+}
 const items = ref<Task[]>([]);
 const total = ref(0);
 const page = ref(1);
@@ -118,6 +134,11 @@ async function save(): Promise<void> {
     startAt: dlg.form.startAt?.toISOString(),
   })) as unknown as { batchId?: string };
   dlg.visible = false; ElMessage.success(r.batchId ? `发布单已创建（${dlg.form.contentIds.length} 条内容）` : '发布任务已创建'); load();
+}
+async function retry(row: Task): Promise<void> {
+  await ElMessageBox.confirm('向全部目标终端重新下发该任务？', '手动重发（PB-07）');
+  await http.post(`/publish-tasks/${row.id}/retry`);
+  ElMessage.success('已重新下发'); load();
 }
 async function revokeBatch(batchId: string): Promise<void> {
   await ElMessageBox.confirm('整批撤回：发布单内全部内容将从终端删除', '确认整批撤回');

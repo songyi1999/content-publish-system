@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { ReviewService } from './review.service';
 import { ContentsService } from '../contents/contents.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -30,6 +30,22 @@ export class ReviewController {
       }),
     ]);
     return { total, items };
+  }
+
+  /** 紧急插播绿色通道（PD-07）：审核员/管理员跳过 AI 与人工复审直接通过，全程留痕 */
+  @Post(':id/fast-approve')
+  @Roles('admin', 'auditor')
+  async fastApprove(@Param('id') id: string, @CurrentUser() me: JwtUser) {
+    const cur = await this.prisma.content.findUnique({ where: { id } });
+    if (!cur) throw new NotFoundException('内容不存在');
+    if (!['DRAFT', 'AI_REVIEW', 'MANUAL_REVIEW', 'REJECTED'].includes(cur.status)) {
+      throw new BadRequestException(`当前状态 ${cur.status} 无需绿色通道`);
+    }
+    await this.prisma.content.update({ where: { id }, data: { status: 'APPROVED' } });
+    await this.prisma.auditLog.create({
+      data: { userId: me.sub, action: 'CONTENT_FAST_APPROVED', targetType: 'content', targetId: id, detail: { from: cur.status, channel: 'emergency' } as never },
+    });
+    return { id, status: 'APPROVED' };
   }
 
   /** 编辑提交后自动触发 AI 初审（也可手动重扫） */

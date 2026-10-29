@@ -56,10 +56,27 @@ export class DevicesGateway implements OnGatewayConnection, OnGatewayDisconnect 
         data: {
           lastSeenAt: new Date(),
           appVersion: payload.appVersion ?? undefined,
+          model: payload.model ?? undefined,
+          memTotalMB: payload.memTotalMB ?? undefined,
+          storageFreeBytes: payload.storageFreeBytes ?? undefined,
         },
       })
       .catch(() => undefined);
+    await this.checkStorageWatermark(payload.deviceCode, payload.storageFreeBytes);
     return { ok: true };
+  }
+
+  /** 存储水位告警（DV-07）：剩余存储低于阈值（默认 1024MB）时 webhook 告警，同终端 30 分钟节流 */
+  private async checkStorageWatermark(code: string, freeBytes?: number | null): Promise<void> {
+    if (freeBytes == null) return;
+    const row = await this.prisma.appParam.findUnique({ where: { key: 'storageAlertFreeMB' } }).catch(() => undefined);
+    const thresholdMB = typeof (row?.value as { mb?: number })?.mb === 'number' ? (row!.value as { mb: number }).mb : 1024;
+    if (freeBytes > thresholdMB * 1024 * 1024) return;
+    await this.notify.send({
+      key: `storage:${code}`,
+      throttleMs: 30 * 60_000,
+      content: `【内容发布系统】终端存储水位告警：${code} 剩余 ${(freeBytes / 1024 / 1024).toFixed(0)}MB（阈值 ${thresholdMB}MB）`,
+    });
   }
 
   /** 向指定终端下发指令（发布/下架/更新/重启/截屏等），离线终端返回 false */

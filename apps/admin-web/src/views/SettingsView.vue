@@ -14,6 +14,28 @@
       <el-form-item label="下载限速（MB/s）">
         <el-input-number v-model="params.downloadRateMbps" :min="1" :max="100" />
       </el-form-item>
+      <el-divider>下载与终端（PB-10/DV-07/PD-06）</el-divider>
+      <el-form-item label="错峰下载窗口">
+        <el-input v-model="params.downloadWindow" placeholder="如 00:00-06:00，留空=全天可下载" style="width: 220px" />
+      </el-form-item>
+      <el-form-item label="存储水位告警">
+        <el-input-number v-model="params.storageAlertFreeMB" :min="100" :max="102400" />
+        <span class="tip">剩余低于该 MB 数时 webhook 告警</span>
+      </el-form-item>
+      <el-form-item label="排期交叠策略">
+        <el-select v-model="params.scheduleOverlap" style="width: 220px">
+          <el-option label="允许交叠（按优先级覆盖）" value="allow" />
+          <el-option label="禁止交叠（保存时校验）" value="forbid" />
+        </el-select>
+      </el-form-item>
+      <el-divider>账号安全（UM-01）与备份（SY-02）</el-divider>
+      <el-form-item label="密码最小长度">
+        <el-input-number v-model="params.passwordMinLength" :min="6" :max="32" />
+      </el-form-item>
+      <el-form-item label="自动备份">
+        <el-switch v-model="params.backupAutoEnabled" />
+        <span class="tip">开启后每小时快照归档，保留 7 天</span>
+      </el-form-item>
       <el-divider>审核规则（AV-07）</el-divider>
       <el-form-item label="可疑处置策略">
         <el-select v-model="params.reviewSuspectPolicy" style="width: 220px">
@@ -75,6 +97,11 @@ const params = reactive({
   grayGroupIds: [] as string[],
   reviewSuspectPolicy: 'reject',
   reviewVideoFrames: 3,
+  downloadWindow: '',
+  storageAlertFreeMB: 1024,
+  scheduleOverlap: 'allow',
+  passwordMinLength: 8,
+  backupAutoEnabled: false,
 });
 
 async function load(): Promise<void> {
@@ -88,12 +115,30 @@ async function load(): Promise<void> {
   const rv = (p.review ?? {}) as { suspectPolicy?: string; videoFrames?: number };
   params.reviewSuspectPolicy = rv.suspectPolicy ?? 'reject';
   params.reviewVideoFrames = rv.videoFrames ?? 3;
+  const dw = (p.downloadWindow ?? {}) as { window?: string };
+  params.downloadWindow = dw.window ?? '';
+  const wm = (p.storageAlertFreeMB ?? {}) as { mb?: number };
+  params.storageAlertFreeMB = wm.mb ?? 1024;
+  const so = (p.scheduleOverlap ?? {}) as { mode?: string };
+  params.scheduleOverlap = so.mode ?? 'allow';
+  const pw = (p.passwordPolicy ?? {}) as { minLength?: number };
+  params.passwordMinLength = pw.minLength ?? 8;
+  const ba = (p.backupAutoEnabled ?? {}) as { enabled?: boolean };
+  params.backupAutoEnabled = ba.enabled ?? false;
   backups.value = (await http.get('/system/backups')) as unknown as typeof backups.value;
   groups.value = (await http.get('/device-groups')) as unknown as typeof groups.value;
 }
 async function save(): Promise<void> {
-  const { reviewSuspectPolicy, reviewVideoFrames, ...rest } = params;
-  await http.put('/system/params', { ...rest, review: { suspectPolicy: reviewSuspectPolicy, videoFrames: reviewVideoFrames } });
+  const { reviewSuspectPolicy, reviewVideoFrames, downloadWindow, storageAlertFreeMB, scheduleOverlap, passwordMinLength, backupAutoEnabled, ...rest } = params;
+  await http.put('/system/params', {
+    ...rest,
+    review: { suspectPolicy: reviewSuspectPolicy, videoFrames: reviewVideoFrames },
+    downloadWindow: { window: downloadWindow || undefined },
+    storageAlertFreeMB: { mb: storageAlertFreeMB },
+    scheduleOverlap: { mode: scheduleOverlap },
+    passwordPolicy: { minLength: passwordMinLength },
+    backupAutoEnabled: { enabled: backupAutoEnabled },
+  });
   ElMessage.success('参数已保存');
 }
 async function testAlert(): Promise<void> {

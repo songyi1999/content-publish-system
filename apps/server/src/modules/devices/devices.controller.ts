@@ -31,6 +31,10 @@ export class DevicesController {
       ip: d.ip,
       lastSeenAt: d.lastSeenAt ? d.lastSeenAt.toISOString() : null,
       online: this.gateway.isOnline(d.code),
+      model: d.model,
+      memTotalMB: d.memTotalMB,
+      storageFreeBytes: d.storageFreeBytes == null ? null : Number(d.storageFreeBytes),
+      powerPlan: d.powerPlan,
     }));
   }
 
@@ -61,6 +65,32 @@ export class DevicesController {
     }
     await this.audit.log({ userId: me.sub, action: 'DEVICE_UPDATE', targetType: 'device', targetId: id, detail: body });
     return { ok: true };
+  }
+
+  /** 解绑（DV-04）：清除设备密钥、重发激活码，终端需重新激活 */
+  @Post(':id/unbind')
+  @Roles('admin')
+  async unbind(@Param('id') id: string, @CurrentUser() me: JwtUser) {
+    const activateCode = Math.random().toString(36).slice(2, 10).toUpperCase();
+    await this.prisma.device.update({ where: { id }, data: { deviceKey: null, activateCode, lastSeenAt: null } });
+    await this.audit.log({ userId: me.sub, action: 'DEVICE_UNBIND', targetType: 'device', targetId: id });
+    return { ok: true, activateCode };
+  }
+
+  /** 远程擦除（DV-04）：指令终端清空本地缓存与配置并回到激活页 */
+  @Post(':id/wipe')
+  @Roles('admin')
+  async wipe(@Param('id') id: string, @CurrentUser() me: JwtUser) {
+    const device = await this.prisma.device.findUnique({ where: { id } });
+    if (!device) return { ok: false, message: '设备不存在' };
+    const sent = this.gateway.sendCommand(device.code, {
+      id: randomBytes(8).toString('hex'),
+      type: 'clear_cache' as unknown as DeviceCommandType,
+      payload: {},
+      issuedAt: Date.now(),
+    });
+    await this.audit.log({ userId: me.sub, action: 'DEVICE_WIPE', targetType: 'device', targetId: id, detail: { sent } });
+    return { ok: sent, message: sent ? '擦除指令已下发' : '终端离线，上线后自动拉取空清单并清缓存' };
   }
 
   /** 远程指令（DV-08/DV-11）：重启/关机/截屏 */

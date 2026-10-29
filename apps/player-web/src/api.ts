@@ -3,6 +3,8 @@ import { io } from 'socket.io-client';
 import type { DeviceCommand, PlayableItem, Program, ScheduleSlot } from '@cps/shared';
 
 const CONF_KEY = 'cps.device';
+/** 终端应用版本（心跳与更新检查上报） */
+export const APP_VERSION = '1.2.0';
 
 export interface TerminalConfig {
   baseUrl: string;
@@ -65,6 +67,8 @@ export interface Manifest {
   programs: Program[];
   schedules: ScheduleSlot[];
   version: string;
+  /** 错峰下载窗口（PB-10）：窗口外终端暂停媒体下载 */
+  sync?: { downloadWindow?: string };
 }
 
 export async function fetchManifest(): Promise<Manifest> {
@@ -85,14 +89,24 @@ export async function report(event: string, detail?: Record<string, unknown>): P
   }
 }
 
+/** 版本检查（TC-09）：返回灰度解析后的最新版与安装包地址 */
+export async function fetchVersion(): Promise<{ latest: string; apkUrl: string; exeUrl: string; upToDate: boolean }> {
+  const key = loadConfig()?.deviceKey;
+  const base = defaultBaseUrl();
+  const res = await fetch(`${base}/api/device-api/version`, { headers: { 'x-app-version': APP_VERSION, ...(key ? { 'x-device-key': key } : {}) } });
+  if (!res.ok) throw new Error(`version -> ${res.status}`);
+  return (await res.json()) as { latest: string; apkUrl: string; exeUrl: string; upToDate: boolean };
+}
+
 /** 心跳长连接（R3）：30 秒一次，接收指令（发布/截屏/重启等） */
 export function connectHeartbeat(handlers: { onCommand: (cmd: DeviceCommand) => void; onUp: () => void; onDown: () => void }) {
   const cfg = loadConfig();
   if (!cfg) return;
   const base = new URL(cfg.baseUrl);
-  const socket = io(cfg.baseUrl, { path: '/api/device-api/socket.io'.replace('/api/device-api', '/device') || undefined, transports: ['websocket', 'polling'] });
+  // 网关 namespace /device，engine path 保持默认 /socket.io（此前路径拼错导致终端心跳从未连上）
+  const socket = io(`${cfg.baseUrl}/device`, { path: '/socket.io', transports: ['websocket', 'polling'] });
   void base;
-  const beat = () => socket.emit('device:heartbeat', { deviceCode: cfg.deviceCode, appVersion: '0.1.0' });
+  const beat = () => socket.emit('device:heartbeat', { deviceCode: cfg.deviceCode, appVersion: APP_VERSION });
   socket.on('connect', () => { beat(); handlers.onUp(); });
   socket.on('disconnect', () => handlers.onDown());
   socket.on('device:command', (cmd: DeviceCommand) => handlers.onCommand(cmd));

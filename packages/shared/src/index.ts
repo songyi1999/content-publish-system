@@ -56,6 +56,8 @@ export const DeviceCommandType = {
   SHUTDOWN: 'shutdown',
   SCREENSHOT: 'screenshot',
   SET_VOLUME: 'set_volume',
+  CLEAR_CACHE: 'clear_cache',
+  SET_POWER_PLAN: 'set_power_plan',
 } as const;
 export type DeviceCommandType = (typeof DeviceCommandType)[keyof typeof DeviceCommandType];
 
@@ -72,6 +74,9 @@ export interface HeartbeatPayload {
   appVersion?: string;
   storageFreeBytes?: number;
   currentProgramId?: string | null;
+  /** 台账（DV-02）：终端型号与内存 */
+  model?: string;
+  memTotalMB?: number;
 }
 
 /* ---------------- 排期（R12：分时段 + 优先级冲突模型） ---------------- */
@@ -151,6 +156,10 @@ export interface DeviceDto {
   ip: string | null;
   lastSeenAt: string | null;
   online: boolean;
+  model?: string | null;
+  memTotalMB?: number | null;
+  storageFreeBytes?: number | null;
+  powerPlan?: unknown;
 }
 
 export interface ApiOk<T> {

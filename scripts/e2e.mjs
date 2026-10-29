@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const BASE = process.env.E2E_BASE || 'http://127.0.0.1:3000';
 const FIXTURE = (p) => new URL(p, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const requireCjs = (await import('node:module')).createRequire(import.meta.url);
+const { io } = requireCjs('../apps/player-web/node_modules/socket.io-client');
 
 let passed = 0;
 let failed = 0;
@@ -116,6 +118,8 @@ async function main() {
   r = await api('POST', '/api/devices', { token, body: { name: 'E2E终端' } });
   check('DV-01 创建设备并生成激活码', r.status === 201 && !!r.data?.activateCode);
   const activateCode = r.data?.activateCode;
+  const deviceCodeE2E = r.data?.code;
+  const deviceIdE2E = r.data?.id;
 
   r = await api('POST', '/api/device-api/activate', { body: { activateCode } });
   check('DV-01 激活换取 deviceKey', r.status === 201 && !!r.data?.deviceKey);
@@ -342,6 +346,104 @@ async function main() {
     check('ED-07 HEVC 上传自动转码为 H.264', r.status === 201 && r.data?.body?.transcoded === true && r.data?.mimeType === 'video/mp4');
     check('ED-07 转码后 sha256 更新', typeof r.data?.sha256 === 'string' && r.data.sha256.length === 64 && !r.data.sha256.startsWith('b64ff93f'));
   }
+
+
+  /* ---- 批次二 P1：密码强度/双档缩略图/进度上报/错峰/交叠/绿色通道/台账/解绑/重发/自动备份参数 ---- */
+
+  // UM-01 密码强度
+  r = await api('POST', '/api/users', { token, body: { username: `weak-${uniq}`, password: '123' } });
+  check('UM-01 弱密码被拒绝', r.status === 400);
+
+  // ED-03 双档缩略图（清理旧记录保证幂等）
+  {
+    const pngMut = Buffer.concat([png, Buffer.from(`e2e-${uniq}`)]); // 尾字节变化避开 sha 去重（PNG 尾部冗余不影响解码）
+    const imgFd2 = new FormData();
+    imgFd2.append('file', new Blob([pngMut], { type: 'image/png' }), `e2e-${uniq}.png`);
+    r = await api('POST', '/api/media/upload', { token, body: imgFd2, raw: true });
+    check('ED-03 双档缩略图', r.status === 201 && !!r.data?.body?.thumbPath && !!r.data?.body?.thumbPathLg);
+  }
+
+  // PB-06 逐台下载进度：发一条内容 → 终端上报进度 → 任务体记录
+  const progId2 = await (async () => {
+    const id = (await api('POST', '/api/contents', { token, body: { title: '进度上报-测试', type: 'richtext', body: { html: '<p>进度</p>' } } })).data.id;
+    await api('POST', `/api/contents/${id}/submit`, { token });
+    await api('POST', `/api/review/${id}/ai`, { token });
+    await api('POST', `/api/review/${id}/approve`, { token });
+    const t = await api('POST', '/api/publish-tasks', { token, body: { contentIds: [id], targetType: 'ALL', mode: 'now' } });
+    return { id, taskId: t.data?.id ?? t.data?.ids?.[0] };
+  })();
+  r = await api('POST', '/api/device-api/report', { headers: { 'x-device-key': deviceKey }, body: { event: 'SYNC_PROGRESS', detail: { contentId: progId2.id, percent: 66 } } });
+  check('PB-06 进度上报受理', r.status === 201);
+  r = await api('GET', `/api/publish-tasks?status=DONE&pageSize=50`, { token });
+  const progTask = r.data.items.find((t) => t.id === progId2.taskId);
+  check('PB-06 任务记录逐台进度', !!progTask && progTask.body?.perDeviceProgress?.[deviceCodeE2E] === 66);
+
+  // PB-10 错峰下载窗口
+  await api('PUT', '/api/system/params', { token, body: { downloadWindow: { window: '00:00-06:00' } } });
+  r = await api('GET', '/api/system/params', { token });
+  check('PB-10 错峰窗口参数', r.data?.downloadWindow?.window === '00:00-06:00');
+  m = await api('GET', '/api/device-api/manifest', dev);
+  check('PB-10 清单携带下载窗口', m.data?.sync?.downloadWindow === '00:00-06:00');
+  await api('PUT', '/api/system/params', { token, body: { downloadWindow: {} } });
+
+  // PD-06 排期交叠校验
+  r = await api('POST', '/api/schedules', { token, body: { name: '交叠A-' + uniq, programId: zoneProgId, daysOfWeek: [1], startMinute: 600, endMinute: 660 } });
+  check('PD-06 首个排期创建成功', r.status === 201);
+  await api('PUT', '/api/system/params', { token, body: { scheduleOverlap: { mode: 'forbid' } } });
+  r = await api('POST', '/api/schedules', { token, body: { name: '交叠B冲突', programId: zoneProgId, daysOfWeek: [1], startMinute: 630, endMinute: 690 } });
+  check('PD-06 禁止交叠拦截', r.status === 400);
+  await api('PUT', '/api/system/params', { token, body: { scheduleOverlap: { mode: 'allow' } } });
+  r = await api('POST', '/api/schedules', { token, body: { name: '交叠B允许', programId: zoneProgId, daysOfWeek: [1], startMinute: 630, endMinute: 690 } });
+  check('PD-06 允许交叠恢复', r.status === 201);
+
+  // PD-07 紧急插播绿色通道
+  r = await api('GET', '/api/roles', { token });
+  const auditorRole = r.data.find((x) => x.name === 'auditor');
+  await api('POST', '/api/users', { token, body: { username: `e2e-au-${uniq}`, password: 'Auditor@123', roleId: auditorRole.id } });
+  const au = (await api('POST', '/api/auth/login', { body: { username: `e2e-au-${uniq}`, password: 'Auditor@123' } })).data?.accessToken;
+  const fastId = (await api('POST', '/api/contents', { token, body: { title: '绿色通道-测试', type: 'richtext', body: { html: '<p>紧急</p>' } } })).data.id;
+  r = await api('POST', `/api/review/${fastId}/fast-approve`, { token: au });
+  check('PD-07 绿色通道直达通过', r.status === 201 && r.data?.status === 'APPROVED');
+  r = await api('POST', '/api/publish-tasks', { token: au, body: { contentIds: [fastId], targetType: 'ALL', mode: 'now' } });
+  check('PD-07 绿色通道内容可发布', r.status === 201);
+  r = await api('GET', '/api/logs?action=FAST_APPROVED&pageSize=10', { token });
+  check('PD-07 绿色通道留痕', r.data.items.some((i) => i.action === 'CONTENT_FAST_APPROVED'));
+
+  // DV-02 心跳台账入库（socket.io 心跳）
+  await new Promise((done) => {
+    const sock = io(`${BASE}/device`, { path: '/socket.io', transports: ['websocket'], reconnection: false });
+    sock.on('connect', () => {
+      sock.emit('device:heartbeat', { deviceCode: deviceCodeE2E, appVersion: '1.2.0', model: 'E2E-Model-X', memTotalMB: 2048, storageFreeBytes: 536870912 });
+      setTimeout(async () => {
+        const dl = await api('GET', '/api/devices', { token });
+        const d = dl.data.find((x) => x.code === deviceCodeE2E);
+        check('DV-02 心跳台账入库（型号/存储）', d?.model === 'E2E-Model-X' && Number(d?.storageFreeBytes) === 536870912);
+        sock.close();
+        done();
+      }, 1200);
+    });
+    setTimeout(() => { check('DV-02 心跳台账入库（型号/存储）', false); done(); }, 8000);
+  });
+
+  // PB-07 手动重发
+  r = await api('POST', `/api/publish-tasks/${progId2.taskId}/retry`, { token });
+  check('PB-07 手动重发成功', r.status === 201 || r.status === 200);
+  r = await api('GET', '/api/logs?action=PUBLISH_RETRY&pageSize=5', { token });
+  check('PB-07 重发留痕', r.data.items.some((i) => i.action === 'PUBLISH_RETRY'));
+
+  // DV-04 解绑与重新激活（放最后：会使旧 deviceKey 失效）
+  r = await api('POST', `/api/devices/${deviceIdE2E}/unbind`, { token });
+  check('DV-04 解绑返回新激活码', r.status === 201 && !!r.data?.activateCode);
+  m = await api('GET', '/api/device-api/manifest', dev);
+  check('DV-04 旧密钥失效', m.status === 401 || m.status === 403 || m.status === 404);
+  r = await api('POST', '/api/device-api/activate', { body: { activateCode: r.data.activateCode } });
+  check('DV-04 新激活码可重新激活', r.status === 201 && !!r.data?.deviceKey);
+
+  // SY-02 自动备份参数
+  await api('PUT', '/api/system/params', { token, body: { backupAutoEnabled: { enabled: true } } });
+  r = await api('GET', '/api/system/params', { token });
+  check('SY-02 自动备份参数', r.data?.backupAutoEnabled?.enabled === true);
+  await api('PUT', '/api/system/params', { token, body: { backupAutoEnabled: { enabled: false } } });
 
   /* ---- 汇总 ---- */
   console.log(results.join('\n'));
