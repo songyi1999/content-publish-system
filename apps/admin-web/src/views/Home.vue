@@ -42,15 +42,17 @@ const auth = useAuthStore();
 
 const menus = [
   { path: '/', title: '工作台', ready: true },
-  { path: '/columns', title: '栏目管理', ready: false },
-  { path: '/contents', title: '内容管理', ready: false },
-  { path: '/media', title: '素材库', ready: false },
-  { path: '/programs', title: '节目与排期', ready: false },
-  { path: '/devices', title: '设备管理', ready: false },
-  { path: '/publish', title: '发布任务', ready: false },
-  { path: '/review', title: '审核中心', ready: false },
-  { path: '/logs', title: '日志审计', ready: false },
-  { path: '/settings', title: '系统设置', ready: false },
+  { path: '/columns', title: '栏目管理', ready: true },
+  { path: '/contents', title: '内容管理', ready: true },
+  { path: '/media', title: '素材库', ready: true },
+  { path: '/programs', title: '节目编排', ready: true },
+  { path: '/schedules', title: '排期管理', ready: true },
+  { path: '/devices', title: '设备管理', ready: true },
+  { path: '/publish', title: '发布任务', ready: true },
+  { path: '/review', title: '审核中心', ready: true },
+  { path: '/logs', title: '日志审计', ready: true },
+  { path: '/users', title: '用户管理', ready: true },
+  { path: '/roles', title: '角色管理', ready: true },
 ];
 
 const milestones = [

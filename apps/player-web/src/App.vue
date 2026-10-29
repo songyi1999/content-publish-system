@@ -1,111 +1,249 @@
 <template>
-  <div class="player" @click="toggleFullscreen">
-    <div class="zone-main">
-      <!-- 演示模式：按 player-core 的循环定位渲染当前条目 -->
-      <div v-if="current" class="slide" :key="current.item.id">
-        <div v-if="current.item.type === 'video'" class="video">视频区（M5 接入本地 MP4）</div>
-        <div v-else class="poster" :style="{ background: current.item.color }">
-          <h1>{{ current.item.title }}</h1>
-          <p>player-core locateInPlaylist → index {{ current.index }} · 进度 {{ Math.round(current.progressMs / 1000) }}s</p>
-        </div>
+  <div class="stage" @click="wake">
+    <!-- 未激活：输入激活码（DV-01） -->
+    <div v-if="phase === 'activating'" class="gate">
+      <h2>内容发布终端</h2>
+      <div class="row">
+        <input v-model="serverUrl" placeholder="服务器地址（如 http://192.168.1.10:3000）" />
+        <input v-model="code" placeholder="激活码" @keyup.enter="doActivate" />
+        <button @click="doActivate">激活</button>
+      </div>
+      <p v-if="errMsg" class="err">{{ errMsg }}</p>
+    </div>
+
+    <!-- 同步中 -->
+    <div v-else-if="phase === 'syncing'" class="gate">
+      <h2>内容同步中…</h2>
+      <p>{{ syncMsg }}</p>
+      <p class="net" :class="{ offline: !online }">{{ online ? '已连接服务器' : '服务器不可达，稍后重试（离线播放不受影响）' }}</p>
+    </div>
+
+    <!-- 播放：按排期选节目，按版式渲染（R11/R12/R2） -->
+    <div v-else class="player" :class="`layout-${currentLayout}`">
+      <div class="zone-main">
+        <template v-if="playing">
+          <video v-if="playing.type === 'video' && playing.src" :src="playing.src" autoplay muted loop playsinline ref="videoEl" @error="next" />
+          <img v-else-if="playing.type === 'image' && playing.src" :src="playing.src" ref="imgEl" />
+          <div v-else-if="playing.html" class="rich" v-html="playing.html"></div>
+          <div v-else class="text-slide">
+            <h1>{{ playing.title ?? '' }}</h1>
+          </div>
+        </template>
+      </div>
+      <div v-if="currentLayout === 'video-ticker'" class="zone-ticker">
+        <div class="ticker-inner">{{ tickerText }}</div>
+      </div>
+      <div v-if="currentLayout === 'left-right'" class="zone-side">
+        <div class="clock">{{ clockTime }}</div>
+        <div class="title">{{ programName }}</div>
       </div>
     </div>
-    <div class="zone-ticker">
-      <div class="ticker-inner">滚动字幕区（R11 节目编排演示） · {{ clock }}</div>
-    </div>
+
+    <div class="status">{{ online ? '' : '离线自治播放中 · ' }}{{ clockTime }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import { locateInPlaylist } from '@cps/player-core';
-import type { PlayableItem } from '@cps/shared';
+import type { Manifest, TerminalConfig } from './api';
+import { activate, connectHeartbeat, defaultBaseUrl, fetchManifest, loadConfig, report, uploadScreenshot } from './api';
+import { syncItems, getMedia } from './cache';
+import { locateInPlaylist, pickActiveSlot } from '@cps/player-core';
+import type { PlayableItem, Program } from '@cps/shared';
 
-interface DemoItem extends PlayableItem {
-  color: string;
+type Phase = 'activating' | 'syncing' | 'playing';
+
+const phase = ref<Phase>('activating');
+const serverUrl = ref('http://127.0.0.1:3000');
+const code = ref('');
+const errMsg = ref('');
+const syncMsg = ref('');
+const online = ref(false);
+const clockTime = ref('');
+const manifest = ref<Manifest | null>(null);
+const programName = ref('');
+const playStart = ref(0);
+const currentItems = ref<PlayableItem[]>([]);
+const currentLayout = ref<Program['layout']>('full');
+const tickerText = ref('欢迎使用内容集中发布系统');
+const lastInteraction = ref(Date.now());
+const videoEl = ref<HTMLVideoElement | null>(null);
+const imgEl = ref<HTMLImageElement | null>(null);
+
+let hb: ReturnType<typeof connectHeartbeat> | undefined;
+let timer: ReturnType<typeof setInterval> | undefined;
+let shotTimer: ReturnType<typeof setInterval> | undefined;
+let syncTimer: ReturnType<typeof setInterval> | undefined;
+
+const playing = computed<{ type: string; src?: string; html?: string; title?: string } | null>(() => {
+  const loc = locateInPlaylist(currentItems.value, Date.now() - playStart.value);
+  const it = loc?.item;
+  if (!it) return null;
+  if (it.type === 'video' || it.type === 'image') {
+    if (blobUrls.value.has(it.id)) return { type: it.type, src: blobUrls.value.get(it.id), title: it.title };
+    return { type: 'text', title: it.title ?? it.id };
+  }
+  if (it.html) return { type: 'richtext', html: it.html, title: it.title };
+  return { type: 'text', title: it.title ?? '' };
+});
+
+const blobUrls = ref(new Map<string, string>());
+
+function next(): void { playStart.value = Date.now() - 1e9; }
+
+function wake(): void {
+  lastInteraction.value = Date.now();
+  void document.documentElement.requestFullscreen?.().catch(() => undefined);
 }
 
-const demoItems: DemoItem[] = [
-  { id: 'd1', type: 'text', title: '欢迎使用内容集中发布系统', durationSec: 8, color: '#1A2330' },
-  { id: 'd2', type: 'image', title: '图片轮播位 01', durationSec: 6, color: '#2A4A3A' },
-  { id: 'd3', type: 'text', title: '离线自治播放演示 · 断网不停播', durationSec: 8, color: '#4A2A3A' },
-];
+async function doActivate(): Promise<void> {
+  errMsg.value = '';
+  try {
+    const cfg: TerminalConfig = await activate(serverUrl.value.replace(/\/$/, ''), code.value.trim());
+    code.value = '';
+    await afterConfig(cfg);
+  } catch (e) {
+    errMsg.value = '激活失败：' + (e as Error).message;
+  }
+}
 
-const elapsed = ref(0);
-const clock = ref('');
-let start = performance.now();
-let timer: ReturnType<typeof setInterval> | undefined;
+async function afterConfig(_cfg: TerminalConfig): Promise<void> {
+  phase.value = 'syncing';
+  await syncLoop();
+  startPlaying();
+}
 
-const current = computed(() =>
-  locateInPlaylist(demoItems, elapsed.value) as { index: number; item: DemoItem; progressMs: number } | null,
-);
+async function syncLoop(): Promise<void> {
+  try {
+    const m = await fetchManifest();
+    const changed = m.version !== manifest.value?.version;
+    manifest.value = m;
+    online.value = true;
+    if (changed) {
+      syncMsg.value = '下载媒体文件…';
+      await syncItems(m.contents.concat(...m.programs.map((p) => p.items)), (msg) => (syncMsg.value = msg));
+      for (const [id, old] of blobUrls.value) URL.revokeObjectURL(old);
+      const map = new Map<string, string>();
+      for (const item of m.contents.concat(...m.programs.map((p) => p.items))) {
+        if (item.remoteUrl) {
+          const blob = await getMedia(item.id).catch(() => undefined);
+          if (blob) map.set(item.id, URL.createObjectURL(blob));
+        }
+      }
+      blobUrls.value = map;
+      await report('DOWNLOAD_DONE', { version: m.version });
+    }
+  } catch {
+    online.value = false;
+  }
+}
+
+/** 应用排期：优先级最高的生效节目，无排期回落默认内容（不黑屏） */
+function applySchedule(): void {
+  const m = manifest.value;
+  if (!m) return;
+  const active = pickActiveSlot(m.schedules, new Date());
+  if (active) {
+    const p = m.programs.find((x) => x.id === active.programId);
+    if (p) {
+      currentItems.value = p.items;
+      currentLayout.value = p.layout ?? 'full';
+      programName.value = p.name;
+      playStart.value = Date.now();
+      return;
+    }
+  }
+  currentLayout.value = 'full';
+  programName.value = '默认轮播';
+  if (currentItems.value !== m.contents) {
+    currentItems.value = m.contents;
+    playStart.value = Date.now();
+  }
+}
+
+function startPlaying(): void {
+  phase.value = 'playing';
+  applySchedule();
+  timer = setInterval(() => {
+    clockTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+    applySchedule();
+    // 无人交互 60 秒自动回默认节目（触摸场景）
+    if (Date.now() - lastInteraction.value > 60_000 && currentLayout.value !== 'full') applySchedule();
+  }, 1_000);
+  syncTimer = setInterval(() => void syncLoop().then(applySchedule), 60_000);
+  shotTimer = setInterval(() => void captureAndUpload(), 30 * 60_000); // 30 分钟监播（R14）
+}
+
+/** 监播截图：canvas 抓当前视频帧或图片（richtext 页面暂不采集） */
+async function captureAndUpload(): Promise<void> {
+  try {
+    const el = (videoEl.value ?? imgEl.value) as HTMLVideoElement | HTMLImageElement | null;
+    if (!el) return;
+    const elAny = el as HTMLVideoElement & HTMLImageElement;
+    const w = elAny.videoWidth || elAny.naturalWidth || 320;
+    const h = elAny.videoHeight || elAny.naturalHeight || 240;
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = Math.round((320 * h) / w) || 240;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(el, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/jpeg', 0.6));
+    if (blob) await uploadScreenshot(blob);
+  } catch {
+    /* 截屏失败不影响播放 */
+  }
+}
 
 onMounted(() => {
-  timer = setInterval(() => {
-    elapsed.value = performance.now() - start;
-    clock.value = new Date().toLocaleString('zh-CN', { hour12: false });
-  }, 500);
+  clockTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+  const cfg = loadConfig();
+  if (cfg) {
+    serverUrl.value = cfg.baseUrl;
+    void afterConfig(cfg);
+    hb = connectHeartbeat({
+      onUp: () => (online.value = true),
+      onDown: () => (online.value = false),
+      onCommand: (cmd) => {
+        void report('CMD_RECEIVED', { type: cmd.type });
+        if (cmd.type === 'publish' || cmd.type === 'unpublish') void syncLoop().then(applySchedule);
+        else if (cmd.type === 'screenshot') void captureAndUpload();
+      },
+    });
+  }
+  void defaultBaseUrl();
 });
 
 onUnmounted(() => {
+  hb?.close();
   if (timer) clearInterval(timer);
+  if (shotTimer) clearInterval(shotTimer);
+  if (syncTimer) clearInterval(syncTimer);
 });
-
-function toggleFullscreen(): void {
-  if (!document.fullscreenElement) void document.documentElement.requestFullscreen();
-}
 </script>
 
 <style scoped>
-.player {
-  width: 100vw;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: #000;
-  color: #fff;
-}
-.zone-main {
-  flex: 1;
-  display: flex;
-}
-.slide {
-  flex: 1;
-  display: flex;
-}
-.poster,
-.video {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: 4vw;
-}
-.poster p {
-  font-size: 1.6vw;
-  opacity: 0.7;
-}
-.video {
-  background: #101010;
-  color: #888;
-}
-.zone-ticker {
-  height: 8vh;
-  overflow: hidden;
-  background: #d4875a;
-  display: flex;
-  align-items: center;
-}
-.ticker-inner {
-  white-space: nowrap;
-  font-size: 3.5vh;
-  padding-left: 100%;
-  animation: ticker 18s linear infinite;
-}
-@keyframes ticker {
-  to {
-    transform: translateX(-100%);
-  }
-}
+.stage { width: 100vw; height: 100vh; background: #000; color: #fff; overflow: hidden; position: relative; }
+.gate { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+.gate .row { display: flex; gap: 8px; }
+.gate input { padding: 10px 12px; font-size: 16px; border: 1px solid #555; background: #111; color: #fff; width: 300px; }
+.gate button { padding: 10px 24px; font-size: 16px; background: #d4875a; border: none; color: #fff; cursor: pointer; }
+.err { color: #f56c6c; }
+.net { color: #909399; }
+.net.offline { color: #e6a23c; }
+.player { width: 100%; height: 100%; display: flex; flex-direction: column; }
+.layout-left-right { flex-direction: row; }
+.zone-main { flex: 1; display: flex; align-items: stretch; justify-content: center; overflow: hidden; }
+.zone-main :deep(video), .zone-main img { width: 100%; height: 100%; object-fit: contain; }
+.layout-left-right .zone-main { flex: 3; }
+.zone-side { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #1a2330; }
+.zone-side .clock { font-size: 7vh; }
+.zone-side .title { font-size: 3vh; color: #d4875a; }
+.zone-ticker { height: 7vh; background: #d4875a; overflow: hidden; display: flex; align-items: center; }
+.ticker-inner { white-space: nowrap; font-size: 3.2vh; padding-left: 100%; animation: ticker 20s linear infinite; }
+@keyframes ticker { to { transform: translateX(-100%); } }
+.text-slide { flex: 1; display: flex; align-items: center; justify-content: center; font-size: 5vw; text-align: center; padding: 4vw; }
+.rich { flex: 1; overflow: auto; padding: 3vh 4vw; font-size: 2.6vh; background: #fff; color: #222; }
+.rich :deep(img) { max-width: 100%; }
+.status { position: absolute; right: 8px; bottom: 4px; font-size: 12px; color: rgba(255, 255, 255, 0.35); }
 </style>

@@ -15,7 +15,9 @@
     "element-plus": "^2.7.5",
     "pinia": "^2.1.7",
     "vue": "^3.4.27",
-    "vue-router": "^4.3.2"
+    "vue-router": "^4.3.2",
+    "@wangeditor/editor": "^5.1.23",
+    "@wangeditor/editor-for-vue": "^5.1.12"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.4",
