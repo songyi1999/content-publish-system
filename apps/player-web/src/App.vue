@@ -1,13 +1,16 @@
 <template>
   <div class="stage" @click="wake">
-    <!-- 未激活：输入激活码（DV-01） -->
+    <!-- 未激活：输入激活码（DV-01）。竖屏/窄窗口下纵向排列，避免横排溢出屏幕 -->
     <div v-if="phase === 'activating'" class="gate">
       <h2>内容发布终端</h2>
-      <div class="row">
-        <input v-model="serverUrl" placeholder="服务器地址（如 http://192.168.1.10:3000）" />
-        <input v-model="code" placeholder="激活码" @keyup.enter="doActivate" />
-        <button @click="doActivate">激活</button>
+      <div class="form">
+        <label for="gate-server">服务器地址</label>
+        <input id="gate-server" v-model="serverUrl" placeholder="如 http://10.0.2.2:3000 或 http://192.168.1.10:3000" autocapitalize="off" spellcheck="false" />
+        <label for="gate-code">激活码</label>
+        <input id="gate-code" v-model="code" placeholder="管理后台 · 设备管理 中生成" @keyup.enter="doActivate" />
+        <button @click="doActivate">激 活</button>
       </div>
+      <p class="hint">安卓模拟器内 10.0.2.2 即电脑本机；也可填电脑局域网 IP</p>
       <p v-if="errMsg" class="err">{{ errMsg }}</p>
     </div>
 
@@ -40,14 +43,14 @@
       </div>
     </div>
 
-    <div class="status">{{ online ? '' : '离线自治播放中 · ' }}{{ clockTime }}<span v-if="weather"> · {{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</span></div>
+    <div v-if="phase === 'playing'" class="status">{{ online ? '' : '离线自治播放中 · ' }}{{ clockTime }}<span v-if="weather"> · {{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</span></div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { Manifest, TerminalConfig } from './api';
-import { activate, connectHeartbeat, defaultBaseUrl, fetchManifest, loadConfig, report, uploadScreenshot } from './api';
+import { activate, connectHeartbeat, fetchManifest, loadConfig, platformDefaultBaseUrl, report, uploadScreenshot } from './api';
 import { syncItems, getMedia } from './cache';
 import { locateInPlaylist, pickActiveSlot } from '@cps/player-core';
 import { fetchWeather, weatherEmoji, type WeatherNow } from './weather';
@@ -56,7 +59,7 @@ import type { PlayableItem, Program } from '@cps/shared';
 type Phase = 'activating' | 'syncing' | 'playing';
 
 const phase = ref<Phase>('activating');
-const serverUrl = ref('http://127.0.0.1:3000');
+const serverUrl = ref(platformDefaultBaseUrl());
 const code = ref('');
 const errMsg = ref('');
 const syncMsg = ref('');
@@ -217,7 +220,6 @@ onMounted(() => {
       },
     });
   }
-  void defaultBaseUrl();
 });
 
 onUnmounted(() => {
@@ -230,10 +232,12 @@ onUnmounted(() => {
 
 <style scoped>
 .stage { width: 100vw; height: 100vh; background: #000; color: #fff; overflow: hidden; position: relative; }
-.gate { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
-.gate .row { display: flex; gap: 8px; }
-.gate input { padding: 10px 12px; font-size: 16px; border: 1px solid #555; background: #111; color: #fff; width: 300px; }
-.gate button { padding: 10px 24px; font-size: 16px; background: #d4875a; border: none; color: #fff; cursor: pointer; }
+.gate { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 0 18px; box-sizing: border-box; }
+.gate .form { display: flex; flex-direction: column; gap: 6px; width: min(420px, 90vw); }
+.gate .form label { font-size: 13px; color: #909399; align-self: flex-start; }
+.gate input { padding: 10px 12px; font-size: 16px; border: 1px solid #555; background: #111; color: #fff; width: 100%; box-sizing: border-box; }
+.gate button { padding: 12px 24px; font-size: 16px; background: #d4875a; border: none; color: #fff; cursor: pointer; margin-top: 10px; }
+.hint { font-size: 12px; color: #6b6e73; text-align: center; }
 .err { color: #f56c6c; }
 .net { color: #909399; }
 .net.offline { color: #e6a23c; }

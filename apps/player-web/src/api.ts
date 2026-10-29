@@ -23,12 +23,19 @@ export function clearConfig(): void {
   localStorage.removeItem(CONF_KEY);
 }
 
-/** 未配置时的默认服务器地址：同源（Electron file:// 场景配置后覆盖） */
+/** 未配置时的默认服务器地址（Electron file:// 场景配置后覆盖） */
 export function defaultBaseUrl(): string {
   const saved = loadConfig();
   if (saved?.baseUrl) return saved.baseUrl;
   const u = new URL(location.origin);
   return u.protocol === 'file:' ? 'http://127.0.0.1:3000' : u.origin;
+}
+
+/** 激活表单预填：安卓 WebView（Capacitor）内 127.0.0.1 是设备自身，10.0.2.2 才是宿主电脑 */
+export function platformDefaultBaseUrl(): string {
+  const cap = (globalThis as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  if (cap?.isNativePlatform?.()) return 'http://10.0.2.2:3000';
+  return 'http://127.0.0.1:3000';
 }
 
 async function req(base: string, path: string, init?: RequestInit): Promise<Response> {
