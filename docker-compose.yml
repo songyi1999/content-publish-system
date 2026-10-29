@@ -63,6 +63,9 @@ services:
       - server
     ports:
       - '8080:80'
+      - '8443:8443'
+    volumes:
+      - ./deploy/certs:/etc/nginx/certs:ro
     restart: unless-stopped
 
 volumes:

@@ -38,6 +38,16 @@ async function schedulePowerOff(offMinute: number): Promise<void> {
   await run('shutdown', ['/s', '/t', String(sec)]).catch(() => undefined);
 }
 
+/** D8-A 内网 HTTPS：放行由本系统自签 CA（CPS Root CA）签发的服务端证书 */
+app.on('certificate-error', (event, _wc, _url, _error, cert, callback) => {
+  if (cert?.issuerName?.includes('CPS Root CA')) {
+    event.preventDefault();
+    callback(true);
+    return;
+  }
+  callback(false);
+});
+
 function createWindow(): void {
   const win = new BrowserWindow({
     fullscreen: true,

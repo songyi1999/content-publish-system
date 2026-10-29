@@ -8,5 +8,6 @@ RUN pnpm install --filter @cps/admin-web... && pnpm --filter @cps/admin-web run 
 
 FROM nginx:alpine
 COPY apps/admin-web/nginx.conf /etc/nginx/conf.d/default.conf
+COPY apps/admin-web/cps-locations.conf /etc/nginx/cps-locations.conf
 COPY --from=build /app/apps/admin-web/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 80 8443

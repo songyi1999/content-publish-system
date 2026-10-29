@@ -445,6 +445,19 @@ async function main() {
   check('SY-02 自动备份参数', r.data?.backupAutoEnabled?.enabled === true);
   await api('PUT', '/api/system/params', { token, body: { backupAutoEnabled: { enabled: false } } });
 
+
+  // D8-A：HTTPS 统一入口（自签 CA，nginx 8443 终结 TLS）
+  {
+    const https = await import('node:https');
+    const ok = await new Promise((resolve) => {
+      const req = https.request('https://127.0.0.1:8443/api/health', { rejectUnauthorized: false, timeout: 5000 }, (res) => resolve(res.statusCode === 200));
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+      req.end();
+    });
+    check('D8-A HTTPS 入口可用（8443 TLS）', ok);
+  }
+
   /* ---- 汇总 ---- */
   console.log(results.join('\n'));
   console.log(`\n========== 通过 ${passed} / ${passed + failed} ==========`);
