@@ -1,18 +1,15 @@
-# 服务端镜像：含 ffmpeg（M3 转码在容器内完成）
+# 服务端镜像：静态 ffmpeg（多阶段复制，避免 apt 网络瓶颈；M3 转码在容器内完成）
 FROM node:20-bookworm-slim
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
-  && rm -rf /var/lib/apt/lists/*
-RUN corepack enable && npm install -g pnpm@8
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=mwader/static-ffmpeg:7.1 /ffprobe /usr/local/bin/ffprobe
+RUN npm install -g pnpm@8
 
 WORKDIR /app
-COPY pnpm-workspace.yaml package.json .npmrc ./
+COPY pnpm-workspace.yaml package.json tsconfig.base.json .npmrc ./
 COPY packages ./packages
 COPY apps/server ./apps/server
 
-RUN pnpm install --filter @cps/server... \
-  && pnpm --filter @cps/server exec prisma generate \
-  && pnpm --filter @cps/server run build
+RUN pnpm install --filter @cps/server...   && pnpm --filter @cps/server exec prisma generate   && pnpm --filter @cps/server run build
 
 ENV NODE_ENV=production
 EXPOSE 3000
