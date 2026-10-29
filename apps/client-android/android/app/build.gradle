@@ -7,8 +7,8 @@ android {
         applicationId "com.cps.player"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +16,20 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // 正式签名：密钥库随私有仓库托管（个人项目方案）；换签名时替换 p12 并改下方密码
+    signingConfigs {
+        release {
+            storeFile file('cps-release.p12')
+            storePassword System.getenv('CPS_STORE_PASSWORD') ?: 'cps2026release'
+            keyAlias 'cps'
+            keyPassword System.getenv('CPS_STORE_PASSWORD') ?: 'cps2026release'
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }

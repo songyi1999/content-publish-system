@@ -9,7 +9,16 @@
 | `Windows EXE` | tag `win-v*` 或手动 | NSIS 安装包 → Artifacts / Releases |
 | `Server Docker Images` | tag `server-v*` 或手动 | server / admin-web 镜像 → ghcr.io |
 
-## Android APK 签名配置（正式发布前必做）
+## Android APK 签名（已配置）
+
+按用户决策采用**私有仓库托管密钥**方案：`apps/client-android/android/app/cps-release.p12`（PKCS12，别名 cps，密码 cps2026release，有效期 30 年）已随仓库提交，`app/build.gradle` 的 signingConfigs 引用该文件，CI 直接产出正式签名 APK，**无需配置任何 Secrets**。
+
+注意事项：
+- 该方案仅适合私有仓库；若仓库转公开，必须先移除 p12 并更换签名（历史包需卸载重装）。
+- 换签名：重新生成 p12 替换文件并修改 build.gradle 中密码（建议改用环境变量 CPS_STORE_PASSWORD 注入）。
+- 备份：请把 cps-release.p12 另存到仓库之外的安全位置。
+
+~~旧方案（Secrets 注入，备用）：~~
 
 1. 本机生成签名密钥（一次即可，妥善备份）：
 

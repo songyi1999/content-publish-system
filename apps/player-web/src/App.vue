@@ -34,12 +34,13 @@
         <div class="ticker-inner">{{ tickerText }}</div>
       </div>
       <div v-if="currentLayout === 'left-right'" class="zone-side">
+        <div class="weather" v-if="weather">{{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</div>
         <div class="clock">{{ clockTime }}</div>
         <div class="title">{{ programName }}</div>
       </div>
     </div>
 
-    <div class="status">{{ online ? '' : '离线自治播放中 · ' }}{{ clockTime }}</div>
+    <div class="status">{{ online ? '' : '离线自治播放中 · ' }}{{ clockTime }}<span v-if="weather"> · {{ weatherEmoji(weather.weatherCode) }} {{ weather.temperature }}℃</span></div>
   </div>
 </template>
 
@@ -49,6 +50,7 @@ import type { Manifest, TerminalConfig } from './api';
 import { activate, connectHeartbeat, defaultBaseUrl, fetchManifest, loadConfig, report, uploadScreenshot } from './api';
 import { syncItems, getMedia } from './cache';
 import { locateInPlaylist, pickActiveSlot } from '@cps/player-core';
+import { fetchWeather, weatherEmoji, type WeatherNow } from './weather';
 import type { PlayableItem, Program } from '@cps/shared';
 
 type Phase = 'activating' | 'syncing' | 'playing';
@@ -67,6 +69,7 @@ const currentItems = ref<PlayableItem[]>([]);
 const currentLayout = ref<Program['layout']>('full');
 const tickerText = ref('欢迎使用内容集中发布系统');
 const lastInteraction = ref(Date.now());
+const weather = ref<WeatherNow | null>(null);
 const videoEl = ref<HTMLVideoElement | null>(null);
 const imgEl = ref<HTMLImageElement | null>(null);
 
@@ -197,6 +200,9 @@ async function captureAndUpload(): Promise<void> {
 
 onMounted(() => {
   clockTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+  const refreshWeather = () => void fetchWeather().then((w) => (weather.value = w));
+  refreshWeather();
+  setInterval(refreshWeather, 30 * 60_000);
   const cfg = loadConfig();
   if (cfg) {
     serverUrl.value = cfg.baseUrl;
