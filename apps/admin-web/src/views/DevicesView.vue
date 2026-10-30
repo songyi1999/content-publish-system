@@ -44,7 +44,7 @@
         <el-table-column prop="lastSeenAt" label="最后心跳" width="165">
           <template #default="{ row }">{{ row.lastSeenAt ? new Date(row.lastSeenAt).toLocaleString('zh-CN', { hour12: false }) : '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="380">
+        <el-table-column label="操作" width="480" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="powerPlan(row)">定时开关机</el-button>
             <el-button size="small" @click="cmd(row, 'reboot')">重启</el-button>

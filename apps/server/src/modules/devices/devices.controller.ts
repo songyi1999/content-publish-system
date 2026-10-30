@@ -31,6 +31,7 @@ export class DevicesController {
       ip: d.ip,
       lastSeenAt: d.lastSeenAt ? d.lastSeenAt.toISOString() : null,
       online: this.gateway.isOnline(d.code),
+      enabled: d.enabled,
       model: d.model,
       memTotalMB: d.memTotalMB,
       storageFreeBytes: d.storageFreeBytes == null ? null : Number(d.storageFreeBytes),

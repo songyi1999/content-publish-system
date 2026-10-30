@@ -18,8 +18,8 @@
       <el-table-column prop="createdAt" label="时间" width="170">
         <template #default="{ row }">{{ new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false }) }}</template>
       </el-table-column>
-      <el-table-column prop="username" label="操作人" width="110" />
-      <el-table-column prop="action" label="动作" width="170">
+      <el-table-column prop="username" label="操作人" width="150" show-overflow-tooltip />
+      <el-table-column prop="action" label="动作" width="200" show-overflow-tooltip>
         <template #default="{ row }"><el-tag size="small" :type="row.action.includes('FAIL') || row.action.includes('ANOMALY') ? 'danger' : 'info'">{{ row.action }}</el-tag></template>
       </el-table-column>
       <el-table-column prop="ip" label="IP" width="130" />

@@ -13,7 +13,7 @@ http.interceptors.response.use(
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem('cps.token');
-      if (location.pathname !== '/login') location.href = '/login';
+      if (!location.hash.startsWith('#/login')) location.href = '/#/login';
     }
     return Promise.reject(err);
   },

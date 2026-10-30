@@ -55,7 +55,7 @@
       <el-table-column label="有效期" width="200">
         <template #default="{ row }">{{ fmtDate(row.validFrom) }} ~ {{ fmtDate(row.validTo) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="330">
+      <el-table-column label="操作" width="430" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="open(row)">编辑</el-button>
           <el-button size="small" @click="preview(row)">预览</el-button>

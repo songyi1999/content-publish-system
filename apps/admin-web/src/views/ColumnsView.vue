@@ -11,11 +11,12 @@
     <el-tree :data="tree" node-key="id" default-expand-all highlight-current @node-click="onNodeClick" :props="{ label: 'name', children: 'children' }">
       <template #default="{ data }">
         <span class="node">
-          {{ data.name }}
-          <el-tag v-if="!data.enabled" size="small" type="info">停用</el-tag>
-          <span class="count">{{ (data.children ?? []).length }} 子栏目 / {{ data._count?.contents ?? 0 }} 内容</span>
-          <el-button size="small" link @click.stop="edit(data)">编辑</el-button>
-          <el-button size="small" link type="danger" @click.stop="remove(data)">删除</el-button>
+          <span class="node-name">{{ data.name }} <el-tag v-if="!data.enabled" size="small" type="info">停用</el-tag></span>
+          <span class="count">{{ (data.children ?? []).length }} 子栏目 · {{ data._count?.contents ?? 0 }} 内容</span>
+          <span class="node-ops">
+            <el-button size="small" link type="primary" @click.stop="edit(data)">编辑</el-button>
+            <el-button size="small" link type="danger" @click.stop="remove(data)">删除</el-button>
+          </span>
         </span>
       </template>
     </el-tree>
@@ -86,4 +87,9 @@ defineExpose({ edit });
 .bar { display: flex; justify-content: space-between; }
 .node { display: flex; align-items: center; gap: 8px; }
 .count { font-size: 12px; color: #909399; }
+.node { display: flex; align-items: center; gap: 12px; flex: 1; padding-right: 8px; }
+.node-name { font-weight: 600; color: #303133; display: inline-flex; align-items: center; gap: 6px; }
+.count { color: #909399; font-size: 12px; }
+.node-ops { margin-left: auto; opacity: 0; transition: opacity 0.15s; }
+:deep(.el-tree-node__content:hover) .node-ops { opacity: 1; }
 </style>
